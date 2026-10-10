@@ -1,0 +1,15 @@
+{
+  "_note": "SYNTHETIC delivery fees. Real Egyptian governorate names; fees are invented. 'matrouh' deliberately has NO rate (tests BR-03 / DT-04: never guess a fee).",
+  "rates_updated_at": "2026-10-01T09:00:00+03:00",
+  "governorates": [
+    {"governorate": "cairo",      "name_ar": "القاهرة",     "name_en": "Cairo",       "fee_egp": 60,  "aliases": ["القاهره", "cairo"]},
+    {"governorate": "giza",       "name_ar": "الجيزة",      "name_en": "Giza",        "fee_egp": 60,  "aliases": ["الجيزه", "giza", "gizeh"]},
+    {"governorate": "alexandria", "name_ar": "الإسكندرية",  "name_en": "Alexandria",  "fee_egp": 70,  "aliases": ["الاسكندرية", "اسكندرية", "alex", "alexandria"]},
+    {"governorate": "qalyubia",   "name_ar": "القليوبية",   "name_en": "Qalyubia",    "fee_egp": 65,  "aliases": ["القليوبيه", "qalyubia"]},
+    {"governorate": "sharqia",    "name_ar": "الشرقية",     "name_en": "Sharqia",     "fee_egp": 75,  "aliases": ["الشرقيه", "sharqia", "sharkia", "el sharqia"]},
+    {"governorate": "dakahlia",   "name_ar": "الدقهلية",    "name_en": "Dakahlia",    "fee_egp": 75,  "aliases": ["الدقهليه", "dakahlia"]},
+    {"governorate": "gharbia",    "name_ar": "الغربية",     "name_en": "Gharbia",     "fee_egp": 75,  "aliases": ["الغربيه", "gharbia"]},
+    {"governorate": "aswan",      "name_ar": "أسوان",       "name_en": "Aswan",       "fee_egp": 120, "aliases": ["اسوان", "aswan"]},
+    {"governorate": "matrouh",    "name_ar": "مطروح",       "name_en": "Matrouh",     "fee_egp": null, "aliases": ["مرسى مطروح", "matrouh", "marsa matrouh"]}
+  ]
+}

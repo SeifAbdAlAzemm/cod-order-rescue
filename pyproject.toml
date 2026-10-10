@@ -1,0 +1,9 @@
+[project]
+name = "cod-order-rescue"
+version = "0.1.0"
+description = "COD Order Rescue Agent - hackathon MVP (local, synthetic data, simulated messaging)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

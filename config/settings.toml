@@ -1,0 +1,87 @@
+# COD Order Rescue - runtime configuration.
+#
+# Every [simulation.*] section is a SIMULATION ASSUMPTION for the synthetic demo.
+# None of them is verified merchant policy. Each must carry status = "SIMULATION_ASSUMPTION"
+# (the loader rejects it otherwise). Rationale: docs/SIMULATION-ASSUMPTIONS.md.
+#
+# Secrets never live here. ANTHROPIC_API_KEY is read from the environment only.
+
+[app]
+db_path = "data/cod_rescue.sqlite3"
+fixtures_dir = "data/fixtures"
+currency = "EGP"
+
+[llm]
+provider = "anthropic"
+model = "claude-haiku-5-5"        # override with COD_RESCUE_MODEL
+max_tokens = 1024
+request_timeout_s = 30
+max_retries = 2                   # bounded retries for transient LLM API errors only
+
+# Used only to compute reported cost from measured token usage. USD per 1M tokens.
+[llm.pricing_usd_per_mtok."claude-haiku-5-5"]
+input = 0.10
+output = 0.50
+
+# Hard stop conditions per processed customer event (enforced in code, not by the LLM).
+[agent_budget]
+max_llm_calls = 6
+max_tool_calls = 8
+max_wall_time_s = 60
+max_input_tokens = 40000
+max_output_tokens = 4000
+max_cost_usd = 0.05
+
+[simulation.duplicates]
+status = "SIMULATION_ASSUMPTION"
+window_hours = 24
+# Same normalized customer phone AND identical item signature
+# (multiset of sku/size/quantity). Overlapping SKUs alone do NOT match.
+identity = "phone_normalized"
+item_match = "exact_signature"
+ignore_lifecycle_states = ["CANCELLED"]
+
+[simulation.address]
+status = "SIMULATION_ASSUMPTION"
+required_fields = ["governorate", "city", "street", "building"]
+optional_fields = ["district", "floor", "apartment", "landmark"]
+# A landmark alone never substitutes for street + building.
+
+[simulation.phone]
+status = "SIMULATION_ASSUMPTION"
+pattern = "^01[0125][0-9]{8}$"    # Egyptian mobile, after normalization
+
+[simulation.clarification]
+status = "SIMULATION_ASSUMPTION"
+max_attempts = 3
+on_exceeded = "ESCALATE_TO_HUMAN"
+
+[simulation.pricing]
+status = "SIMULATION_ASSUMPTION"
+amounts_whole_egp = true
+recheck_prices_at_commit = true
+on_price_change = "INVALIDATE_CONFIRMATION_AND_HOLD"
+
+[simulation.inventory]
+status = "SIMULATION_ASSUMPTION"
+reservation_point = "AT_READY_COMMIT"
+
+[simulation.confirmation]
+status = "SIMULATION_ASSUMPTION"
+# A short affirmative counts only if it is the first inbound message after the latest
+# OPEN confirmation request, that request is bound to the current order version,
+# and the reply contains no change request. Anything else -> ask again.
+short_affirmatives = ["تمام", "تمام كده", "ماشي", "موافق", "أيوه", "ايوه", "اه", "ok", "okay", "yes"]
+require_first_reply_after_request = true
+
+[simulation.messaging]
+status = "SIMULATION_ASSUMPTION"
+mode = "SIMULATED_OUTBOX"         # the only permitted value in this MVP
+
+# Test-only switches. All false for normal runs.
+[simulation.fault_injection]
+status = "SIMULATION_ASSUMPTION"
+inventory_unavailable = false
+shipping_rates_unavailable = false
+price_source_unavailable = false
+commit_timeout_after_success = false

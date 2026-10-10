@@ -1,0 +1,25 @@
+{
+  "_note": "SYNTHETIC catalog for the fictional shop 'StyleHub Egypt'. Prices and stock are invented test data.",
+  "products": [
+    {"product_id": "P-HOODIE", "name_ar": "هودي قطن", "name_en": "Cotton Hoodie"},
+    {"product_id": "P-TSHIRT", "name_ar": "تيشيرت قطن أساسي", "name_en": "Basic Cotton T-Shirt"},
+    {"product_id": "P-JEANS", "name_ar": "بنطلون جينز سليم", "name_en": "Slim Jeans"},
+    {"product_id": "P-DRESS", "name_ar": "فستان صيفي", "name_en": "Summer Dress"}
+  ],
+  "variants": [
+    {"sku": "HOODIE-BLK-M",  "product_id": "P-HOODIE", "size": "M",  "color": "black", "unit_price_egp": 750, "available": 3},
+    {"sku": "HOODIE-BLK-L",  "product_id": "P-HOODIE", "size": "L",  "color": "black", "unit_price_egp": 750, "available": 5},
+    {"sku": "HOODIE-BLK-XL", "product_id": "P-HOODIE", "size": "XL", "color": "black", "unit_price_egp": 750, "available": 0},
+    {"sku": "TSHIRT-WHT-S",  "product_id": "P-TSHIRT", "size": "S",  "color": "white", "unit_price_egp": 350, "available": 8},
+    {"sku": "TSHIRT-WHT-M",  "product_id": "P-TSHIRT", "size": "M",  "color": "white", "unit_price_egp": 350, "available": 10},
+    {"sku": "TSHIRT-WHT-L",  "product_id": "P-TSHIRT", "size": "L",  "color": "white", "unit_price_egp": 350, "available": 1},
+    {"sku": "TSHIRT-WHT-XL", "product_id": "P-TSHIRT", "size": "XL", "color": "white", "unit_price_egp": 350, "available": 4},
+    {"sku": "JEANS-BLU-30",  "product_id": "P-JEANS",  "size": "30", "color": "blue",  "unit_price_egp": 600, "available": 6},
+    {"sku": "JEANS-BLU-32",  "product_id": "P-JEANS",  "size": "32", "color": "blue",  "unit_price_egp": 600, "available": 2},
+    {"sku": "JEANS-BLU-34",  "product_id": "P-JEANS",  "size": "34", "color": "blue",  "unit_price_egp": 600, "available": 0},
+    {"sku": "DRESS-RED-S",   "product_id": "P-DRESS",  "size": "S",  "color": "red",   "unit_price_egp": 900, "available": 2},
+    {"sku": "DRESS-RED-M",   "product_id": "P-DRESS",  "size": "M",  "color": "red",   "unit_price_egp": 900, "available": 3}
+  ],
+  "price_updated_at": "2026-10-01T09:00:00+03:00",
+  "stock_updated_at": "2026-10-10T08:00:00+03:00"
+}

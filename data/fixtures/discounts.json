@@ -1,0 +1,7 @@
+{
+  "_note": "SYNTHETIC discount codes. Only active codes are authorized (BR-03).",
+  "discounts": [
+    {"code": "WELCOME10", "kind": "PERCENT", "value": 10, "active": 1},
+    {"code": "OLD50",     "kind": "FIXED",   "value": 50, "active": 0}
+  ]
+}

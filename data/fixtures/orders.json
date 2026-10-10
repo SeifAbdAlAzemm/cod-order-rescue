@@ -1,0 +1,188 @@
+{
+  "_note": "SYNTHETIC orders for the fictional shop 'StyleHub Egypt'. Names are placeholders, phone numbers are invented. 'test_cases' links each order to TEST-SCENARIOS.md; structured address fields are left null where the agent must extract or ask for them.",
+  "orders": [
+    {
+      "order_id": "ORD-1001", "test_cases": ["TC-01", "TC-15"],
+      "purpose": "Complete, available, unambiguous order - happy path; also reused for repeated-event idempotency.",
+      "channel": "whatsapp", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 1", "phone_raw": "01000000001",
+      "address_raw": "القاهرة، مدينة نصر، شارع مصطفى النحاس، عمارة 12، الدور 3، شقة 7",
+      "governorate": "cairo", "city": "مدينة نصر", "street": "شارع مصطفى النحاس", "building": "12", "floor": "3", "apartment": "7",
+      "items": [{"sku": "HOODIE-BLK-L", "quantity": 1}],
+      "created_at": "2026-10-10T08:10:00+03:00"
+    },
+    {
+      "order_id": "ORD-1002", "test_cases": ["TC-02", "TC-03"], "acceptance": ["AC-01"],
+      "purpose": "Requested XL is out of stock; L and M are available.",
+      "channel": "instagram", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 2", "phone_raw": "01100000002",
+      "address_raw": "الجيزة، الدقي، شارع التحرير، عمارة 45، الدور 2",
+      "governorate": "giza", "city": "الدقي", "street": "شارع التحرير", "building": "45", "floor": "2",
+      "items": [{"sku": "HOODIE-BLK-XL", "quantity": 1}],
+      "created_at": "2026-10-10T08:20:00+03:00"
+    },
+    {
+      "order_id": "ORD-1003", "test_cases": ["TC-04"],
+      "purpose": "Requests the LAST unit of TSHIRT-WHT-L; stock will change before final commit.",
+      "channel": "whatsapp", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 3", "phone_raw": "01200000003",
+      "address_raw": "الإسكندرية، سموحة، شارع فوزي معاذ، عمارة 8",
+      "governorate": "alexandria", "city": "سموحة", "street": "شارع فوزي معاذ", "building": "8",
+      "items": [{"sku": "TSHIRT-WHT-L", "quantity": 1}],
+      "created_at": "2026-10-10T08:30:00+03:00"
+    },
+    {
+      "order_id": "ORD-1004", "test_cases": ["TC-05", "TC-06"], "acceptance": ["AC-02"],
+      "purpose": "Address has governorate, city and landmark only; street and building are missing.",
+      "channel": "instagram", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 4", "phone_raw": "01500000004",
+      "address_raw": "الشرقية، الزقازيق، عند مسجد الفتح",
+      "items": [{"sku": "TSHIRT-WHT-M", "quantity": 2}],
+      "created_at": "2026-10-10T08:40:00+03:00"
+    },
+    {
+      "order_id": "ORD-1005", "test_cases": ["TC-07"], "acceptance": ["AC-03"],
+      "purpose": "Customer previously accepted COD total 810 EGP (750 + Cairo 60) for version 2; destination will change.",
+      "channel": "whatsapp", "lifecycle_state": "VERIFIED", "version": 2,
+      "customer_name": "عميل تجريبي 5", "phone_raw": "01000000005",
+      "address_raw": "القاهرة، المعادي، شارع 9، عمارة 20",
+      "governorate": "cairo", "city": "المعادي", "street": "شارع 9", "building": "20",
+      "items": [{"sku": "HOODIE-BLK-M", "quantity": 1}],
+      "quote": {"version": 2, "subtotal_egp": 750, "discount_egp": 0, "shipping_egp": 60, "total_egp": 810},
+      "confirmation_requests": [
+        {"confirmation_request_id": "CR-1005-V2", "order_version": 2, "total_egp": 810, "status": "ACCEPTED",
+         "accepted_event_id": "EVT-1005-001", "created_at": "2026-10-10T08:55:00+03:00", "resolved_at": "2026-10-10T08:57:00+03:00"}
+      ],
+      "messages": [
+        {"direction": "OUTBOUND", "kind": "CONFIRMATION_REQUEST", "confirmation_request_id": "CR-1005-V2",
+         "body": "ملخص طلبك ORD-1005 (نسخة 2): هودي قطن أسود مقاس M × 1 = 750 جنيه + شحن القاهرة 60 جنيه = الإجمالي 810 جنيه دفع عند الاستلام. ترد بـ (تمام) للتأكيد؟",
+         "idempotency_key": "out:CR-1005-V2", "created_at": "2026-10-10T08:55:00+03:00"},
+        {"direction": "INBOUND", "kind": "CUSTOMER", "event_id": "EVT-1005-001", "body": "تمام", "created_at": "2026-10-10T08:57:00+03:00"}
+      ],
+      "created_at": "2026-10-10T08:50:00+03:00"
+    },
+    {
+      "order_id": "ORD-1006", "test_cases": ["TC-08"],
+      "purpose": "Destination governorate (Matrouh) has no trusted shipping rate; price-source outage is injected at runtime.",
+      "channel": "facebook", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 6", "phone_raw": "01100000006",
+      "address_raw": "مطروح، مرسى مطروح، شارع الإسكندرية، عمارة 3",
+      "governorate": "matrouh", "city": "مرسى مطروح", "street": "شارع الإسكندرية", "building": "3",
+      "items": [{"sku": "JEANS-BLU-30", "quantity": 1}],
+      "created_at": "2026-10-10T09:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1007", "test_cases": ["TC-09", "TC-10"], "acceptance": ["AC-04"],
+      "purpose": "An OPEN confirmation request clearly presents version 3; the next customer reply decides confirmation.",
+      "channel": "whatsapp", "lifecycle_state": "VERIFIED", "version": 3,
+      "customer_name": "عميل تجريبي 7", "phone_raw": "01200000007",
+      "address_raw": "القاهرة، مصر الجديدة، شارع الميرغني، عمارة 33، الدور 5",
+      "governorate": "cairo", "city": "مصر الجديدة", "street": "شارع الميرغني", "building": "33", "floor": "5",
+      "items": [{"sku": "DRESS-RED-M", "quantity": 1}],
+      "quote": {"version": 3, "subtotal_egp": 900, "discount_egp": 0, "shipping_egp": 60, "total_egp": 960},
+      "confirmation_requests": [
+        {"confirmation_request_id": "CR-1007-V3", "order_version": 3, "total_egp": 960, "status": "OPEN",
+         "created_at": "2026-10-10T09:15:00+03:00"}
+      ],
+      "messages": [
+        {"direction": "OUTBOUND", "kind": "CONFIRMATION_REQUEST", "confirmation_request_id": "CR-1007-V3",
+         "body": "ملخص طلبك ORD-1007 (نسخة 3): فستان صيفي أحمر مقاس M × 1 = 900 جنيه + شحن القاهرة 60 جنيه = الإجمالي 960 جنيه دفع عند الاستلام. ترد بـ (تمام) للتأكيد؟",
+         "idempotency_key": "out:CR-1007-V3", "created_at": "2026-10-10T09:15:00+03:00"}
+      ],
+      "created_at": "2026-10-10T09:05:00+03:00"
+    },
+    {
+      "order_id": "ORD-1008", "test_cases": ["TC-11", "TC-12"], "acceptance": ["AC-05"],
+      "purpose": "Possible duplicate of ORD-1009: same customer phone (different formatting), identical item signature, 90 minutes apart.",
+      "channel": "instagram", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 8", "phone_raw": "01000000008",
+      "address_raw": "الجيزة، الشيخ زايد، الحي 7، شارع 12، فيلا 4",
+      "governorate": "giza", "city": "الشيخ زايد", "district": "الحي 7", "street": "شارع 12", "building": "4",
+      "items": [{"sku": "TSHIRT-WHT-S", "quantity": 1}, {"sku": "JEANS-BLU-30", "quantity": 1}],
+      "created_at": "2026-10-10T09:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1009", "test_cases": ["TC-11", "TC-12"], "acceptance": ["AC-05"],
+      "purpose": "Possible duplicate of ORD-1008 (items listed in a different order, same signature).",
+      "channel": "whatsapp", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 8", "phone_raw": "+20 100 000 0008",
+      "address_raw": "الجيزة، الشيخ زايد، الحي 7، شارع 12، فيلا 4",
+      "governorate": "giza", "city": "الشيخ زايد", "district": "الحي 7", "street": "شارع 12", "building": "4",
+      "items": [{"sku": "JEANS-BLU-30", "quantity": 1}, {"sku": "TSHIRT-WHT-S", "quantity": 1}],
+      "created_at": "2026-10-10T10:30:00+03:00"
+    },
+    {
+      "order_id": "ORD-1010", "test_cases": [],
+      "purpose": "Negative control: same customer and an overlapping SKU, but a different item signature - must NOT be flagged as a duplicate.",
+      "channel": "whatsapp", "lifecycle_state": "PENDING", "version": 1,
+      "customer_name": "عميل تجريبي 8", "phone_raw": "01000000008",
+      "address_raw": "الجيزة، الشيخ زايد، الحي 7، شارع 12، فيلا 4",
+      "governorate": "giza", "city": "الشيخ زايد", "district": "الحي 7", "street": "شارع 12", "building": "4",
+      "items": [{"sku": "TSHIRT-WHT-S", "quantity": 1}],
+      "created_at": "2026-10-10T11:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1011", "test_cases": ["TC-13"], "acceptance": ["AC-06"],
+      "purpose": "READY_FOR_DISPATCH order; customer will ask to change size (must escalate, never auto-edit).",
+      "channel": "instagram", "lifecycle_state": "READY_FOR_DISPATCH", "version": 4,
+      "customer_name": "عميل تجريبي 11", "phone_raw": "01100000011",
+      "address_raw": "القاهرة، الزمالك، شارع 26 يوليو، عمارة 10",
+      "governorate": "cairo", "city": "الزمالك", "street": "شارع 26 يوليو", "building": "10",
+      "items": [{"sku": "HOODIE-BLK-M", "quantity": 1}],
+      "quote": {"version": 4, "subtotal_egp": 750, "discount_egp": 0, "shipping_egp": 60, "total_egp": 810},
+      "agent_outcome": "READY_FOR_DISPATCH",
+      "created_at": "2026-10-09T15:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1012", "test_cases": ["TC-14"], "acceptance": ["AC-06"],
+      "purpose": "SHIPPED order; modification request must be blocked.",
+      "channel": "whatsapp", "lifecycle_state": "SHIPPED", "version": 3,
+      "customer_name": "عميل تجريبي 12", "phone_raw": "01200000012",
+      "address_raw": "القليوبية، بنها، شارع فريد ندا، عمارة 5",
+      "governorate": "qalyubia", "city": "بنها", "street": "شارع فريد ندا", "building": "5",
+      "items": [{"sku": "JEANS-BLU-32", "quantity": 1}],
+      "created_at": "2026-10-07T12:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1013", "test_cases": ["TC-14"], "acceptance": ["AC-06"],
+      "purpose": "DELIVERED order; modification request must be blocked.",
+      "channel": "instagram", "lifecycle_state": "DELIVERED", "version": 3,
+      "customer_name": "عميل تجريبي 13", "phone_raw": "01500000013",
+      "address_raw": "الدقهلية، المنصورة، شارع الجمهورية، عمارة 14",
+      "governorate": "dakahlia", "city": "المنصورة", "street": "شارع الجمهورية", "building": "14",
+      "items": [{"sku": "DRESS-RED-S", "quantity": 1}],
+      "created_at": "2026-10-03T12:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1014", "test_cases": ["TC-14"], "acceptance": ["AC-06"],
+      "purpose": "CANCELLED order; modification request must be blocked.",
+      "channel": "facebook", "lifecycle_state": "CANCELLED", "version": 2,
+      "customer_name": "عميل تجريبي 14", "phone_raw": "01000000014",
+      "address_raw": "الغربية، طنطا، شارع البحر، عمارة 2",
+      "governorate": "gharbia", "city": "طنطا", "street": "شارع البحر", "building": "2",
+      "items": [{"sku": "TSHIRT-WHT-M", "quantity": 1}],
+      "created_at": "2026-10-08T12:00:00+03:00"
+    },
+    {
+      "order_id": "ORD-1015", "test_cases": ["TC-16"], "acceptance": ["AC-07"],
+      "purpose": "All checks pass and version 2 is confirmed; the readiness commit will time out after possible success.",
+      "channel": "whatsapp", "lifecycle_state": "VERIFIED", "version": 2,
+      "customer_name": "عميل تجريبي 15", "phone_raw": "01100000015",
+      "address_raw": "القاهرة، المقطم، شارع 9، عمارة 77",
+      "governorate": "cairo", "city": "المقطم", "street": "شارع 9", "building": "77",
+      "items": [{"sku": "TSHIRT-WHT-XL", "quantity": 1}],
+      "quote": {"version": 2, "subtotal_egp": 350, "discount_egp": 0, "shipping_egp": 60, "total_egp": 410},
+      "confirmation_requests": [
+        {"confirmation_request_id": "CR-1015-V2", "order_version": 2, "total_egp": 410, "status": "ACCEPTED",
+         "accepted_event_id": "EVT-1015-001", "created_at": "2026-10-10T09:40:00+03:00", "resolved_at": "2026-10-10T09:42:00+03:00"}
+      ],
+      "messages": [
+        {"direction": "OUTBOUND", "kind": "CONFIRMATION_REQUEST", "confirmation_request_id": "CR-1015-V2",
+         "body": "ملخص طلبك ORD-1015 (نسخة 2): تيشيرت قطن أبيض مقاس XL × 1 = 350 جنيه + شحن القاهرة 60 جنيه = الإجمالي 410 جنيه دفع عند الاستلام. ترد بـ (تمام) للتأكيد؟",
+         "idempotency_key": "out:CR-1015-V2", "created_at": "2026-10-10T09:40:00+03:00"},
+        {"direction": "INBOUND", "kind": "CUSTOMER", "event_id": "EVT-1015-001", "body": "تمام كده", "created_at": "2026-10-10T09:42:00+03:00"}
+      ],
+      "created_at": "2026-10-10T09:30:00+03:00"
+    }
+  ]
+}
