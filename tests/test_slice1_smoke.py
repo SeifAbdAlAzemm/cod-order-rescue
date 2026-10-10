@@ -45,7 +45,7 @@ def test_settings_load_with_approved_model_and_simulated_messaging(settings):
     assert settings.simulation.messaging.mode == "SIMULATED_OUTBOX"
     assert settings.simulation.duplicates.window_hours == 24
     assert settings.simulation.duplicates.item_match == "exact_signature"
-    assert "claude-haiku-5-5" in settings.llm.pricing_usd_per_mtok
+    assert settings.llm.profile.pricing.status == "known" and settings.llm.provider == "anthropic"
 
 
 def test_every_simulation_section_is_labelled_as_assumption(settings):
@@ -72,7 +72,7 @@ def test_env_overrides_model_and_db_path(tmp_path):
         (lambda t: t.replace("window_hours = 24", "window_hours = 24\nunexpected_key = 1"), "unexpected_key"),
         (lambda t: t.replace('[simulation.phone]\nstatus = "SIMULATION_ASSUMPTION"', "[simulation.phone]"), "status"),
         (lambda t: t.replace("max_tool_calls = 8", "max_tool_calls = 0"), "agent_budget"),
-        (lambda t: t.replace('provider = "anthropic"', 'provider = "anthropic"\napi_key = "x"'), "secrets"),
+        (lambda t: t.replace('active_profile = "anthropic-haiku"', 'active_profile = "anthropic-haiku"\napi_key = "x"'), "secrets"),
     ],
     ids=["live-messaging", "unknown-key", "unlabelled-assumption", "unbounded-budget", "secret-in-file"],
 )

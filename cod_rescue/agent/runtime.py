@@ -11,10 +11,10 @@ import json
 import time
 import uuid
 
-from cod_rescue.agent.llm import LLMError
+from cod_rescue.agent.providers.base import AssistantTurn, LLMError, ToolResult, ToolResultsTurn, UserTurn
 from cod_rescue.agent.prompts import SYSTEM_PROMPT, build_turn
 from cod_rescue.agent.templates import fallback_message
-from cod_rescue.agent.toolbox import TOOL_SPECS, Dispatcher, tool_result_block
+from cod_rescue.agent.toolbox import TOOL_SPECS, Dispatcher
 from cod_rescue.config import model_pricing
 from cod_rescue.context import ToolContext, redact
 from cod_rescue.policy import READY, evaluate
@@ -35,18 +35,26 @@ class _Run:
         self.ctx, self.llm = ctx, llm
         self.run_id = f"run-{uuid.uuid4().hex[:12]}"
         self.live = llm.mode == "LIVE"
-        self.pricing = model_pricing(ctx.settings) if self.live else None
+        self.provider = getattr(llm, "provider", "unknown")
+        self.profile = (getattr(llm, "profile", None) or ctx.settings.llm.profile) if self.live else None
+        self.pricing = model_pricing(ctx.settings, self.profile) if self.live else None
+        if not self.live:
+            self.cost_basis = "NOT_APPLICABLE_REPLAY"
+        elif self.pricing.status == "verified_free":
+            self.cost_basis = "VERIFIED_FREE_MODEL"
+        else:
+            self.cost_basis = "ESTIMATED_FROM_TOKEN_USAGE"
         self.step = 0
         self.llm_calls = self.tool_calls = self.invalid = 0
         self.input_tokens = self.output_tokens = 0
-        self.cost = 0.0
+        self.cost = 0.0                      # local estimate from token usage x configured prices
+        self.provider_cost: float | None = None   # what the provider itself reported, if anything
         self.started = time.monotonic()
         ctx.run_id = self.run_id
         ctx.conn.execute(
-            "INSERT INTO agent_runs (run_id, mode, model, order_id, event_id, status, cost_basis, started_at) "
-            "VALUES (?, ?, ?, ?, ?, 'RUNNING', ?, ?)",
-            (self.run_id, llm.mode, llm.model, order_id, event_id,
-             "ESTIMATED_FROM_TOKEN_USAGE" if self.live else "NOT_APPLICABLE_REPLAY", ctx.now()))
+            "INSERT INTO agent_runs (run_id, mode, provider, model, order_id, event_id, status, cost_basis, started_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', ?, ?)",
+            (self.run_id, llm.mode, self.provider, llm.model, order_id, event_id, self.cost_basis, ctx.now()))
 
     def trace(self, kind, name, inp, out, latency_ms=None, in_tok=None, out_tok=None):
         self.step += 1
@@ -66,8 +74,9 @@ class _Run:
             raise _Stop("TIMEOUT", f"wall time budget {b.max_wall_time_s}s exceeded")
         if self.input_tokens > b.max_input_tokens or self.output_tokens > b.max_output_tokens:
             raise _Stop("BUDGET_EXCEEDED", f"token budget exceeded ({self.input_tokens} in / {self.output_tokens} out)")
-        if self.cost > b.max_cost_usd:
-            raise _Stop("BUDGET_EXCEEDED", f"cost budget ${b.max_cost_usd} exceeded (${self.cost:.5f})")
+        spent = max(self.cost, self.provider_cost or 0.0)  # enforce on the higher of estimate / reported
+        if spent > b.max_cost_usd:
+            raise _Stop("BUDGET_EXCEEDED", f"cost budget ${b.max_cost_usd} exceeded (${spent:.5f})")
 
 
 def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str) -> dict:
@@ -85,7 +94,7 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
     run = _Run(ctx, llm, order_id, event_id)
     budget = ctx.settings.agent_budget
     dispatcher = Dispatcher(ctx, order_id, event_id, load_order(ctx.conn, order_id).version)
-    messages: list[dict] = [{"role": "user", "content": build_turn(ctx, order_id, event_id, text)}]
+    conversation: list = [UserTurn(build_turn(ctx, order_id, event_id, text))]
     error_class = error_detail = None
     final_text = ""
     try:
@@ -97,7 +106,7 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
             if remaining < 1.0:
                 raise _Stop("TIMEOUT", "less than 1s of wall-time budget left for a model call")
             try:
-                resp = llm.create(SYSTEM_PROMPT, TOOL_SPECS, messages, remaining_s=remaining)
+                resp = llm.create(SYSTEM_PROMPT, TOOL_SPECS, conversation, remaining_s=remaining)
             except LLMError as e:
                 run.trace("LLM_CALL", llm.model, None, {"error": e.kind, "message": str(e)[:300]})
                 raise _Stop("TIMEOUT" if e.kind == "TIMEOUT" else "LLM_ERROR", f"{e.kind}: {str(e)[:200]}")
@@ -106,12 +115,15 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
             run.output_tokens += resp.output_tokens
             if run.live:
                 run.cost += (resp.input_tokens * run.pricing.input + resp.output_tokens * run.pricing.output) / 1e6
+                if resp.provider_cost_usd is not None:
+                    run.provider_cost = (run.provider_cost or 0.0) + resp.provider_cost_usd
             run.trace("LLM_CALL", llm.model, None,
                       {"stop_reason": resp.stop_reason, "text": resp.text[:500],
-                       "tool_calls": [c.name for c in resp.tool_calls], "simulated": resp.simulated},
+                       "tool_calls": [c.name for c in resp.tool_calls], "simulated": resp.simulated,
+                       "provider_cost_usd": resp.provider_cost_usd},
                       resp.latency_ms, resp.input_tokens, resp.output_tokens)
             run.check_budget()  # an over-budget response's actions are NOT executed
-            messages.append({"role": "assistant", "content": resp.assistant_content})
+            conversation.append(AssistantTurn(resp.text, resp.tool_calls, resp.raw))
             if not resp.tool_calls:
                 final_text = resp.text
                 break
@@ -129,8 +141,9 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
                         raise _Stop("VALIDATION_ERROR", f"{run.invalid} malformed/unsupported tool calls")
                 if outcome.stop:
                     raise _Stop(outcome.stop, outcome.result.get("status", "tool requested stop"))
-                results.append(tool_result_block(call.id, outcome))
-            messages.append({"role": "user", "content": results})
+                results.append(ToolResult(call.id, json.dumps(outcome.result, ensure_ascii=False, default=str),
+                                          outcome.is_error))
+            conversation.append(ToolResultsTurn(results))
     except _Stop as s:
         error_class, error_detail = s.error_class, s.detail
     except Exception as e:  # unexpected tool/infra failure: fail closed, keep state, log
@@ -155,22 +168,24 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
     status = "COMPLETED" if not error_class else ("STOPPED" if error_class in ("BUDGET_EXCEEDED", "VALIDATION_ERROR", "TIMEOUT") else "FAILED")
     latency_ms = int(run.elapsed_s() * 1000)
     result = {
-        "run_id": run.run_id, "mode": llm.mode, "model": llm.model, "order_id": order_id, "event_id": event_id,
+        "run_id": run.run_id, "mode": llm.mode, "provider": run.provider, "model": llm.model,
+        "profile": run.profile.name if run.profile else None, "order_id": order_id, "event_id": event_id,
         "outcome": o.agent_outcome, "lifecycle_state": o.lifecycle_state, "version": o.version,
         "reasons": reasons, "status": status, "error_class": error_class, "error_detail": error_detail,
         "llm_calls": run.llm_calls, "tool_calls": run.tool_calls,
         "input_tokens": run.input_tokens, "output_tokens": run.output_tokens,
         "cost_usd": round(run.cost, 6),
-        "cost_basis": "ESTIMATED_FROM_TOKEN_USAGE" if run.live else "NOT_APPLICABLE_REPLAY",
+        "cost_basis": run.cost_basis,
+        "provider_cost_usd": round(run.provider_cost, 6) if run.provider_cost is not None else None,
         "latency_ms": latency_ms, "messages_sent": dispatcher.messages_sent, "agent_summary": final_text[:500],
         "fallback_reply_used": fallback_used,
     }
     ctx.conn.execute(
         "UPDATE agent_runs SET status = ?, error_class = ?, error_detail = ?, llm_calls = ?, tool_calls = ?, "
-        "input_tokens = ?, output_tokens = ?, cost_usd = ?, final_outcome = ?, final_lifecycle = ?, "
-        "agent_summary = ?, latency_ms = ?, ended_at = ? WHERE run_id = ?",
+        "input_tokens = ?, output_tokens = ?, cost_usd = ?, provider_cost_usd = ?, final_outcome = ?, "
+        "final_lifecycle = ?, agent_summary = ?, latency_ms = ?, ended_at = ? WHERE run_id = ?",
         (status, error_class, error_detail, run.llm_calls, run.tool_calls, run.input_tokens, run.output_tokens,
-         result["cost_usd"], o.agent_outcome, o.lifecycle_state, final_text[:500], latency_ms, ctx.now(), run.run_id))
+         result["cost_usd"], result["provider_cost_usd"], o.agent_outcome, o.lifecycle_state, final_text[:500], latency_ms, ctx.now(), run.run_id))
     save_event_result(ctx, event_id, result)
     ctx.run_id = None
     return result

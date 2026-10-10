@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -98,10 +99,19 @@ def run_scenario(scenario: dict, settings: Settings, mode: str, work_dir: Path, 
         conn.close()
 
 
+def results_dir(settings: Settings, mode: str) -> Path:
+    """REPLAY is provider-independent; LIVE results are kept per provider and model."""
+    if mode == "REPLAY":
+        return PROJECT_ROOT / "results" / "replay"
+    p = settings.llm.profile
+    return PROJECT_ROOT / "results" / "live" / p.provider / re.sub(r"[^A-Za-z0-9._-]+", "_", p.model)
+
+
 def run_suite(settings: Settings, mode: str, scenario_ids: list[str] | None = None,
               out_dir: Path | None = None, live_llm_factory=None) -> dict:
     assert mode in ("REPLAY", "LIVE")
-    out_dir = out_dir or PROJECT_ROOT / "results" / mode.lower()
+    profile = settings.llm.profile
+    out_dir = out_dir or results_dir(settings, mode)
     out_dir.mkdir(parents=True, exist_ok=True)
     work = out_dir / "dbs"
     work.mkdir(exist_ok=True)
@@ -117,12 +127,26 @@ def run_suite(settings: Settings, mode: str, scenario_ids: list[str] | None = No
         "output_tokens": sum(e["result"].get("output_tokens", 0) for r in results for e in r["events"]),
         "cost_usd": round(sum(e["result"].get("cost_usd", 0) for r in results for e in r["events"]), 6),
     }
+    reported = [e["result"]["provider_cost_usd"] for r in results for e in r["events"]
+                if e["result"].get("provider_cost_usd") is not None and not e["result"].get("replayed_from_saved_result")]
+    totals["provider_cost_usd"] = round(sum(reported), 6) if reported else None
+    # Verified tool support: the real model produced at least one schema-valid tool call that the harness executed.
+    verified = mode == "LIVE" and any(
+        st["kind"] == "TOOL_CALL" and '"INVALID_INPUT"' not in (st["output_json"] or "")
+        and '"UNKNOWN_TOOL"' not in (st["output_json"] or "")
+        for r in results for e in r["events"] for st in e["trace"])
     report = {
         "mode": mode,
         "label": ("REPLAY: scripted model turns, no API calls; validates harness + guarded tools, NOT model "
                   "understanding" if mode == "REPLAY" else
-                  f"LIVE: real model {settings.llm.model}; cost estimated from measured token usage"),
-        "model": "replay-script" if mode == "REPLAY" else settings.llm.model,
+                  f"LIVE: profile {profile.name} ({profile.provider}/{profile.model}); pricing {profile.pricing.status}; "
+                  "local cost = tokens x configured prices; provider-reported cost shown separately"),
+        "provider": "replay" if mode == "REPLAY" else profile.provider,
+        "profile": None if mode == "REPLAY" else profile.name,
+        "model": "replay-script" if mode == "REPLAY" else profile.model,
+        "pricing_status": None if mode == "REPLAY" else profile.pricing.status,
+        "tool_support_verified_live": verified if mode == "LIVE" else "n/a (replay)",
+        "results_path": str(out_dir),
         "run_at": datetime.now(CAIRO_TZ).isoformat(timespec="seconds"),
         "passed": sum(r["passed"] for r in results), "total": len(results), "skipped_not_live_capable": skipped,
         "totals": totals, "scenarios": results,

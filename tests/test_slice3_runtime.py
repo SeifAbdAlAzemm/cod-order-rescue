@@ -109,8 +109,8 @@ class _FakeLive:
         self.calls.append(remaining_s)
         time.sleep(self.sleep)
         call = ToolCall("t1", "get_order_status", {})
-        return LLMResponse([{"type": "tool_use", "id": "t1", "name": "get_order_status", "input": {}}],
-                           [call], "", "tool_use", self.i, self.o)
+        return LLMResponse(text="", tool_calls=[call], stop_reason="tool_use",
+                           input_tokens=self.i, output_tokens=self.o)
 
 
 def test_live_cost_is_estimated_from_usage_and_budget_enforced(ctx):
@@ -133,9 +133,11 @@ def test_tool_call_budget_stops_parallel_spam(ctx):
     assert r["error_class"] == "BUDGET_EXCEEDED" and r["tool_calls"] == 8
 
 
-def test_live_mode_requires_known_model_pricing(settings):
-    s = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, model="claude-unknown-model"))
-    with pytest.raises(ConfigError, match="no pricing"):
+def test_live_mode_refuses_unknown_pricing(settings):
+    from cod_rescue.config import load_settings
+    s = load_settings(env={"COD_RESCUE_MODEL": "claude-unknown-model"})  # overridden model => pricing unknown
+    assert s.llm.profile.pricing.status == "unknown"
+    with pytest.raises(ConfigError, match="never treated as free"):
         model_pricing(s)
 
 
@@ -221,7 +223,7 @@ def test_anthropic_adapter_parses_response_and_sends_config(settings):
     llm = AnthropicLLM(settings, client=_FakeClient(msgs))
     r = llm.create("sys", TOOL_SPECS, [{"role": "user", "content": "hi"}])
     assert [c.name for c in r.tool_calls] == ["get_order_status"] and r.text == "checking"
-    assert (r.input_tokens, r.output_tokens, len(r.assistant_content)) == (1200, 80, 3)  # thinking block kept
+    assert (r.input_tokens, r.output_tokens, len(r.raw)) == (1200, 80, 3)  # thinking block kept in raw
     assert msgs.kwargs["model"] == "claude-haiku-5-5" and msgs.kwargs["output_config"] == {"effort": "medium"}
     assert msgs.kwargs["tools"] is TOOL_SPECS and "tool_choice" not in msgs.kwargs
 

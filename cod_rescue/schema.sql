@@ -1,4 +1,4 @@
--- COD Order Rescue - SQLite schema (schema version 3).
+-- COD Order Rescue - SQLite schema (schema version 4).
 -- Simulated order system for a synthetic shop. Not a real merchant integration.
 -- Money is stored as whole EGP integers (simulation assumption).
 
@@ -232,6 +232,7 @@ CREATE TABLE escalations (
 CREATE TABLE agent_runs (
     run_id        TEXT PRIMARY KEY,
     mode          TEXT NOT NULL CHECK (mode IN ('LIVE', 'REPLAY')),   -- never mixed in reports
+    provider      TEXT,                                               -- replay | anthropic | openai_compatible
     model         TEXT,
     order_id      TEXT REFERENCES orders(order_id),
     event_id      TEXT,
@@ -244,8 +245,11 @@ CREATE TABLE agent_runs (
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd      REAL NOT NULL DEFAULT 0,
+    -- cost_usd: local estimate (tokens x configured prices). provider_cost_usd: provider-reported, if any.
     -- REPLAY runs make no API calls: cost is not applicable, never reported as model cost.
-    cost_basis    TEXT NOT NULL CHECK (cost_basis IN ('NOT_APPLICABLE_REPLAY', 'ESTIMATED_FROM_TOKEN_USAGE')),
+    provider_cost_usd REAL,
+    cost_basis    TEXT NOT NULL CHECK (cost_basis IN
+                    ('NOT_APPLICABLE_REPLAY', 'ESTIMATED_FROM_TOKEN_USAGE', 'VERIFIED_FREE_MODEL')),
     final_outcome TEXT,
     final_lifecycle TEXT,
     agent_summary TEXT,

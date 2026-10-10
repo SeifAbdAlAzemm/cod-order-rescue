@@ -1,2 +1,4 @@
 pytest==8.3.3
-anthropic==1.13.0   # LIVE mode only; REPLAY and tests make no API calls
+anthropic==1.13.0   # LIVE with the anthropic profile only
+openai==3.28.0      # LIVE with OpenAI-compatible profiles (OpenRouter, Hugging Face router, OpenAI)
+# REPLAY mode and the test suite make no API calls and need no credentials.

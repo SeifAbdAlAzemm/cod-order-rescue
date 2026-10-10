@@ -40,7 +40,7 @@ Test case definitions are those of `TEST-SCENARIOS.md`, unchanged and never renu
 | TC-15 | Same event delivered twice | ORD-1001 / ORD-1007 | DT-14 | PASS (tool level) `test_TC15_DT14_*` | PASS S14 | NOT RUN |
 | TC-16 | Commit timeout after possible success | ORD-1015 | AC-07 | PASS `test_TC16_AC07_*`, `test_AC07_*` (3 tests) | PASS S15 | NOT RUN |
 
-Last runs (Slice 3 + robustness fixes): `python -m pytest` → 259 passed (deterministic + replay); `python -m cod_rescue eval` → REPLAY 25/25 scenarios passed. LIVE: not run (no API credentials; no API call has been made).
+Last runs (provider abstraction): `python -m pytest` → 307 passed (deterministic + replay + offline provider conformance); `python -m cod_rescue eval` → REPLAY 25/25 scenarios passed. LIVE: not run for any provider (no API credentials; no model call has been made).
 
 ## Robustness scenarios (Replay; not tied to a TC)
 | Scenario | Condition | Replay | Live |

@@ -12,17 +12,41 @@ fixtures_dir = "data/fixtures"
 currency = "EGP"
 
 [llm]
-provider = "anthropic"
-model = "claude-haiku-5-5"        # override with COD_RESCUE_MODEL
-max_tokens = 4096                 # per call; includes adaptive thinking tokens
-effort = "medium"                 # output_config.effort
-request_timeout_s = 30
+# Provider selection is independent of execution mode: REPLAY (default) never calls a provider.
+# Switch with COD_RESCUE_LLM_PROFILE=<name> or --profile <name>. Keys come from the env var NAMED
+# by api_key_env (or a git-ignored .env) - never from this file.
+active_profile = "anthropic-haiku"
+max_tokens = 4096                 # per call; includes reasoning tokens where applicable
+request_timeout_s = 30            # per attempt; capped further by the remaining per-event wall budget
 max_retries = 2                   # SDK-level bounded retries for transient errors (429/5xx/network)
 
-# Used only to compute reported cost from measured token usage. USD per 1M tokens.
-[llm.pricing_usd_per_mtok."claude-haiku-5-5"]
-input = 0.10
-output = 0.50
+# pricing: "known" (nonzero prices), "verified_free" (zero price verified at a source/date),
+# or "unknown" (LIVE refuses to run; missing pricing is never treated as free). USD per 1M tokens.
+[llm.profiles.anthropic-haiku]
+provider = "anthropic"
+model = "claude-haiku-5-5"
+api_key_env = "ANTHROPIC_API_KEY"
+pricing = "known"
+price_input_per_mtok = 0.10
+price_output_per_mtok = 0.50
+pricing_source = "Anthropic published pricing (Claude API reference table, cached 2026-10-06)"
+options = { effort = "medium" }
+
+[llm.profiles.openrouter-gemma-free]
+provider = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1"
+model = "google/gemma-4-31b-it:free"
+api_key_env = "OPENROUTER_API_KEY"
+pricing = "verified_free"
+price_input_per_mtok = 0.0
+price_output_per_mtok = 0.0
+pricing_source = "OpenRouter GET /api/v1/models: prompt=0, completion=0, supported_parameters includes tools (2026-10-10); re-verified before LIVE"
+options = { openrouter_usage = true, app_title = "COD Order Rescue (hackathon MVP)" }
+
+# Templates (NOT tested in this slice) - copy into a new [llm.profiles.<name>] table and fill in:
+#   OpenRouter paid: provider="openai_compatible", base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY", pricing="known"
+#   Hugging Face:    provider="openai_compatible", base_url="https://router.huggingface.co/v1", api_key_env="HF_TOKEN"
+#   OpenAI:          provider="openai_compatible", base_url="https://api.openai.com/v1", api_key_env="OPENAI_API_KEY", pricing="known"
 
 # Hard stop conditions per processed customer event (enforced in code, not by the LLM).
 [agent_budget]

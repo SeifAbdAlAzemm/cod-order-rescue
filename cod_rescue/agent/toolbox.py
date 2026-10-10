@@ -6,7 +6,6 @@ them, so the model can only act on the order and message it was given.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 from cod_rescue.context import ToolContext
@@ -275,7 +274,3 @@ def order_view(o) -> dict:
         "items": [{"sku": i.sku, "size": i.size, "color": i.color, "quantity": i.quantity} for i in o.items],
     }
 
-
-def tool_result_block(tool_use_id: str, outcome: ToolOutcome) -> dict:
-    return {"type": "tool_result", "tool_use_id": tool_use_id, "is_error": outcome.is_error,
-            "content": json.dumps(outcome.result, ensure_ascii=False, default=str)}
