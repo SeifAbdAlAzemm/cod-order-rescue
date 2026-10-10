@@ -14,9 +14,10 @@ currency = "EGP"
 [llm]
 provider = "anthropic"
 model = "claude-haiku-5-5"        # override with COD_RESCUE_MODEL
-max_tokens = 1024
+max_tokens = 4096                 # per call; includes adaptive thinking tokens
+effort = "medium"                 # output_config.effort
 request_timeout_s = 30
-max_retries = 2                   # bounded retries for transient LLM API errors only
+max_retries = 2                   # SDK-level bounded retries for transient errors (429/5xx/network)
 
 # Used only to compute reported cost from measured token usage. USD per 1M tokens.
 [llm.pricing_usd_per_mtok."claude-haiku-5-5"]
@@ -29,8 +30,10 @@ max_llm_calls = 6
 max_tool_calls = 8
 max_wall_time_s = 60
 max_input_tokens = 40000
-max_output_tokens = 4000
+max_output_tokens = 12000
 max_cost_usd = 0.05
+max_invalid_actions = 2           # malformed / unknown / disallowed tool calls before fail-closed stop
+history_messages = 12             # recent conversation messages shown to the model
 
 [simulation.duplicates]
 status = "SIMULATION_ASSUMPTION"
@@ -40,6 +43,12 @@ window_hours = 24
 identity = "phone_normalized"
 item_match = "exact_signature"
 ignore_lifecycle_states = ["CANCELLED"]
+# Clearing a duplicate needs explicit evidence (deterministic, the LLM cannot override):
+# the reply must be the only customer message after the duplicate-intent question for THIS pair,
+# every word must be in confirmation affirmatives/fillers or these words, and it must contain
+# at least one affirmative AND one "both" word. "لا واحد بس" or anything conditional -> not cleared.
+both_intended_words = ["الاتنين", "الاثنين", "الطلبين", "طلبين", "اتنين", "الاتنين", "منفصلين", "منفصله", "طلبات", "عايز", "عايزه", "هما", "both", "two", "separate", "want", "them"]
+both_markers = ["الاتنين", "الاثنين", "الطلبين", "طلبين", "اتنين", "both", "two"]
 
 [simulation.address]
 status = "SIMULATION_ASSUMPTION"

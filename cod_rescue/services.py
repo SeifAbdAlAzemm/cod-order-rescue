@@ -286,6 +286,20 @@ def is_unambiguous_affirmative(settings: Settings, text: str | None) -> bool:
     return bool(words) and all(w in allowed for w in words) and any(w in core for w in words)
 
 
+def is_explicit_both_intended(settings: Settings, text: str | None) -> bool:
+    """Strict lexical gate for DT-08: explicit 'yes, both orders'. Questions, negations,
+    conditions or any unlisted word fail (e.g. 'لا واحد بس', 'الاتنين؟', 'اه بس الغي واحد')."""
+    if not text or "?" in text or "؟" in text:
+        return False
+    conf, dup = settings.simulation.confirmation, settings.simulation.duplicates
+    core = {normalize_text(w) for w in conf.short_affirmatives}
+    markers = {normalize_text(w) for w in dup.both_markers}
+    allowed = core | markers | {normalize_text(w) for w in (*conf.filler_words, *dup.both_intended_words)}
+    words = normalize_text(text).split()
+    return (bool(words) and all(w in allowed for w in words)
+            and any(w in core for w in words) and any(w in markers for w in words))
+
+
 # ---------- BR-05 duplicates ----------
 
 def item_signature(order: Order) -> tuple:

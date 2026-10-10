@@ -20,7 +20,8 @@ from cod_rescue.normalize import is_grounded, normalize_phone
 from cod_rescue.policy import ESCALATE, ON_HOLD, READY, Decision, evaluate
 from cod_rescue.services import (
     ADDRESS_FIELDS, EDITABLE_STATES, LOCKED_STATES, compute_quote, find_duplicate_candidates,
-    is_unambiguous_affirmative, load_order, render_summary, resolve_governorate, summary_hash,
+    is_explicit_both_intended, is_unambiguous_affirmative, load_order, render_summary, resolve_governorate,
+    summary_hash,
 )
 
 ALLOWED_TRANSITIONS = {
@@ -509,9 +510,53 @@ def flag_duplicates(ctx: ToolContext, order_id: str) -> dict:
         return _refused("UNKNOWN_ORDER", order_id=order_id)
 
 
-def clear_duplicate_flag(ctx: ToolContext, order_id: str, other_order_id: str, event_id: str) -> dict:
-    """DT-08: the customer said both orders are intended. Clears ONLY the duplicate concern.
+def request_duplicate_intent(ctx: ToolContext, order_id: str) -> dict:
+    """Ask, with deterministic text naming both order IDs, whether the customer intended both orders.
 
+    Binds the question (message seq + the order whose conversation carries it) to each open flag,
+    so a later reply can only resolve the pair it was asked about.
+    """
+    try:
+        with transaction(ctx.conn):
+            load_order(ctx.conn, order_id)
+            flags = ctx.conn.execute(
+                "SELECT * FROM duplicate_flags WHERE (order_id_a = ? OR order_id_b = ?) AND status = 'OPEN' "
+                "ORDER BY order_id_a, order_id_b", (order_id, order_id)).fetchall()
+            if not flags:
+                return _refused("NO_OPEN_FLAG", hint="call flag_duplicates first")
+            pending = [f for f in flags if f["intent_order_id"] == order_id and f["intent_request_seq"] is not None]
+            if len(pending) == len(flags) and not ctx.conn.execute(
+                    "SELECT 1 FROM messages WHERE order_id = ? AND direction = 'INBOUND' AND seq > ?",
+                    (order_id, min(f["intent_request_seq"] for f in flags))).fetchone():
+                return _ok("ALREADY_REQUESTED")
+            others = [f["order_id_b"] if f["order_id_a"] == order_id else f["order_id_a"] for f in flags]
+            ids = " و ".join([order_id, *others])
+            text = (f"لاحظنا إن فيه طلبين بنفس الرقم ونفس المنتجات بالظبط ({ids}). "
+                    "هل حضرتك عايز الطلبين الاتنين؟ لو عايزهم الاتنين رد بـ (أيوه الاتنين). "
+                    "لو عايز طلب واحد بس قولنا وزميلنا هيتواصل معاك. مش هنلغي أي طلب من غير ما نتأكد منك.")
+            n = ctx.conn.execute("SELECT COUNT(*) FROM messages WHERE order_id = ? AND kind = 'DUPLICATE_INTENT_REQUEST'",
+                                 (order_id,)).fetchone()[0] + 1
+            cur = ctx.conn.execute(
+                "INSERT INTO messages (order_id, direction, kind, body, idempotency_key, created_at) "
+                "VALUES (?, 'OUTBOUND', 'DUPLICATE_INTENT_REQUEST', ?, ?, ?)",
+                (order_id, text, f"dupq:{order_id}:{n}", ctx.now()))
+            for f in flags:
+                ctx.conn.execute(
+                    "UPDATE duplicate_flags SET intent_order_id = ?, intent_request_seq = ? "
+                    "WHERE order_id_a = ? AND order_id_b = ?", (order_id, cur.lastrowid, f["order_id_a"], f["order_id_b"]))
+            ctx.audit("TOOL", "DUPLICATE_INTENT_REQUESTED", order_id, {"pairs": others})
+            return _ok("REQUESTED", duplicates=others, message=text, delivery="SIMULATED")
+    except UnknownOrder:
+        return _refused("UNKNOWN_ORDER", order_id=order_id)
+
+
+def clear_duplicate_flag(ctx: ToolContext, order_id: str, other_order_id: str, event_id: str) -> dict:
+    """DT-08: clear ONLY the duplicate concern, and only on explicit, pair-bound evidence.
+
+    Required (deterministic; a tool call alone proves nothing):
+      - an OPEN flag for exactly this pair, with a duplicate-intent question sent on `order_id`'s conversation;
+      - `event_id` is a customer message on that same conversation and the ONLY one since the question;
+      - its text explicitly says both are intended (strict lexicon, no negation/condition/question).
     Each order still needs its own version-bound confirmation before it can become ready.
     """
     a, b = sorted((order_id, other_order_id))
@@ -520,20 +565,29 @@ def clear_duplicate_flag(ctx: ToolContext, order_id: str, other_order_id: str, e
                                 (a, b)).fetchone()
         if flag is None or flag["status"] != "OPEN":
             return _refused("NO_OPEN_FLAG")
+        if flag["intent_order_id"] != order_id or flag["intent_request_seq"] is None:
+            return _refused("NO_INTENT_QUESTION", hint="call request_duplicate_intent on this order first")
         msg = ctx.conn.execute(
-            "SELECT created_at FROM messages WHERE event_id = ? AND direction = 'INBOUND' AND order_id IN (?, ?)",
-            (event_id, a, b)).fetchone()
+            "SELECT seq, body FROM messages WHERE event_id = ? AND direction = 'INBOUND' AND order_id = ?",
+            (event_id, order_id)).fetchone()
         if msg is None:
             return _refused("UNKNOWN_EVENT", event_id=event_id)
-        if msg["created_at"] < flag["created_at"]:
-            return _refused("EVENT_PREDATES_FLAG")
+        after = [r["event_id"] for r in ctx.conn.execute(
+            "SELECT event_id FROM messages WHERE order_id = ? AND direction = 'INBOUND' AND seq > ? ORDER BY seq",
+            (order_id, flag["intent_request_seq"]))]
+        if after != [event_id]:
+            return _refused("NOT_DIRECT_REPLY", hint="reply must be the only customer message after the question")
+        if not is_explicit_both_intended(ctx.settings, msg["body"]):
+            ctx.audit("POLICY", "DUPLICATE_CLEAR_REJECTED", order_id, {"event_id": event_id, "body": msg["body"]})
+            return _refused("NOT_EXPLICITLY_BOTH_INTENDED",
+                            hint="keep both orders on hold; ask again or escalate to staff")
         ctx.conn.execute(
-            "UPDATE duplicate_flags SET status = 'CLEARED_BOTH_INTENDED', resolved_at = ? "
-            "WHERE order_id_a = ? AND order_id_b = ?", (ctx.now(), a, b))
+            "UPDATE duplicate_flags SET status = 'CLEARED_BOTH_INTENDED', resolved_at = ?, cleared_by_event_id = ? "
+            "WHERE order_id_a = ? AND order_id_b = ?", (ctx.now(), event_id, a, b))
         for oid in (a, b):
             ctx.conn.execute("UPDATE orders SET outcome_reason = 'DUPLICATE_CLEARED_REEVALUATE', updated_at = ? "
                              "WHERE order_id = ?", (ctx.now(), oid))
-        ctx.audit("TOOL", "DUPLICATE_CLEARED", a, {"pair": [a, b], "event_id": event_id})
+        ctx.audit("POLICY", "DUPLICATE_CLEARED", order_id, {"pair": [a, b], "event_id": event_id})
         return _ok("CLEARED", reevaluate=[a, b])
 
 

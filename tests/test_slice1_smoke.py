@@ -132,9 +132,15 @@ CONSTRAINT_VIOLATIONS = {
         "VALUES ('ORD-1001', 'OUTBOUND', 'INFO', 'hi', 'WHATSAPP', 't')"
     ),
     "unordered-duplicate-pair": (
-        "INSERT INTO duplicate_flags VALUES ('ORD-1009', 'ORD-1008', 'x', 'OPEN', 't', NULL)"
+        "INSERT INTO duplicate_flags (order_id_a, order_id_b, match_basis, status, created_at) "
+        "VALUES ('ORD-1009', 'ORD-1008', 'x', 'OPEN', 't')"
     ),
-    "unknown-run-mode": "INSERT INTO agent_runs (run_id, mode, status, started_at) VALUES ('r', 'MIXED', 'RUNNING', 't')",
+    "unknown-run-mode": ("INSERT INTO agent_runs (run_id, mode, status, cost_basis, started_at) "
+                         "VALUES ('r', 'MIXED', 'RUNNING', 'NOT_APPLICABLE_REPLAY', 't')"),
+    "replay-run-with-model-cost": ("INSERT INTO agent_runs (run_id, mode, status, cost_basis, started_at) "
+                                   "VALUES ('r', 'REPLAY', 'RUNNING', 'ESTIMATED_FROM_TOKEN_USAGE', 't')"),
+    "live-run-labelled-replay-cost": ("INSERT INTO agent_runs (run_id, mode, status, cost_basis, started_at) "
+                                      "VALUES ('r', 'LIVE', 'RUNNING', 'NOT_APPLICABLE_REPLAY', 't')"),
 }
 
 

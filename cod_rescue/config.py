@@ -39,6 +39,7 @@ class LLMConfig:
     provider: str
     model: str
     max_tokens: int
+    effort: str
     request_timeout_s: float
     max_retries: int
     pricing_usd_per_mtok: dict[str, ModelPricing] = field(default_factory=dict)
@@ -52,6 +53,8 @@ class AgentBudget:
     max_input_tokens: int
     max_output_tokens: int
     max_cost_usd: float
+    max_invalid_actions: int
+    history_messages: int
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ class DuplicateRules:
     identity: str
     item_match: str
     ignore_lifecycle_states: list[str]
+    both_intended_words: list[str]
+    both_markers: list[str]
 
 
 @dataclass(frozen=True)
@@ -237,5 +242,33 @@ def _validate(s: Settings) -> None:
     b = s.agent_budget
     if min(b.max_llm_calls, b.max_tool_calls, b.max_input_tokens, b.max_output_tokens) < 1 or b.max_wall_time_s <= 0 or b.max_cost_usd <= 0:
         raise ConfigError("[agent_budget] all limits must be positive (no unbounded execution)")
+    if s.llm.effort not in ("low", "medium", "high"):
+        raise ConfigError("[llm] effort must be low, medium or high")
+    if b.max_invalid_actions < 1 or b.history_messages < 1:
+        raise ConfigError("[agent_budget] max_invalid_actions and history_messages must be >= 1")
     if s.llm.max_retries < 0 or s.llm.max_retries > 5:
         raise ConfigError("[llm] max_retries must be between 0 and 5")
+
+
+def model_pricing(settings: Settings) -> ModelPricing:
+    """Prices for the configured model; LIVE mode refuses to run without them (cost budget needs them)."""
+    try:
+        return settings.llm.pricing_usd_per_mtok[settings.llm.model]
+    except KeyError:
+        raise ConfigError(f"no pricing configured for model {settings.llm.model!r}; "
+                          "add [llm.pricing_usd_per_mtok.\"<model>\"] to settings.toml") from None
+
+
+def load_dotenv(path: Path | None = None, env: dict | None = None) -> None:
+    """Minimal .env loader (KEY=VALUE lines) for ANTHROPIC_API_KEY / COD_RESCUE_*; never overrides real env."""
+    path = path or PROJECT_ROOT / ".env"
+    env = os.environ if env is None else env
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = (x.strip() for x in line.split("=", 1))
+        if (key == "ANTHROPIC_API_KEY" or key.startswith("COD_RESCUE_")) and value and key not in env:
+            env[key] = value.strip('"').strip("'")

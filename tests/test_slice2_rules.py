@@ -14,7 +14,7 @@ from cod_rescue.policy import evaluate
 from cod_rescue import tools
 from cod_rescue.tools import (
     apply_customer_change, clear_duplicate_flag, commit_ready, flag_duplicates, ingest_event, record_confirmation,
-    request_confirmation, resolve_commit_outcome, save_event_result, send_message,
+    request_confirmation, request_duplicate_intent, resolve_commit_outcome, save_event_result, send_message,
 )
 from tests.conftest import FIXED_NOW, with_faults
 from tests.helpers import confirm, count, insert_order, order_row, stock
@@ -320,15 +320,36 @@ def test_TC11_AC05_DT07_both_duplicates_held_none_cancelled(ctx):
 
 def test_TC12_DT08_both_intended_clears_flag_and_each_reevaluated_independently(ctx):
     flag_duplicates(ctx, "ORD-1008")
-    assert clear_duplicate_flag(ctx, "ORD-1008", "ORD-1009", "EVT-NONE")["status"] == "UNKNOWN_EVENT"
-    ingest_event(ctx, "ORD-1008", "EVT-1008-1", "أيوه الاتنين طلبات منفصلة، واحد ليا وواحد لأختي")
-    res = clear_duplicate_flag(ctx, "ORD-1009", "ORD-1008", "EVT-1008-1")
+    ingest_event(ctx, "ORD-1008", "EVT-1008-0", "أيوه الاتنين")  # before any question: not evidence
+    assert clear_duplicate_flag(ctx, "ORD-1008", "ORD-1009", "EVT-1008-0")["status"] == "NO_INTENT_QUESTION"
+    q = request_duplicate_intent(ctx, "ORD-1008")
+    assert q["status"] == "REQUESTED" and "ORD-1008" in q["message"] and "ORD-1009" in q["message"]
+    assert request_duplicate_intent(ctx, "ORD-1008")["status"] == "ALREADY_REQUESTED"
+    assert clear_duplicate_flag(ctx, "ORD-1008", "ORD-1009", "EVT-1008-0")["status"] == "NOT_DIRECT_REPLY"
+    ingest_event(ctx, "ORD-1008", "EVT-1008-1", "أيوه الاتنين")
+    # evidence is bound to the conversation the question was asked on
+    assert clear_duplicate_flag(ctx, "ORD-1009", "ORD-1008", "EVT-1008-1")["status"] == "NO_INTENT_QUESTION"
+    res = clear_duplicate_flag(ctx, "ORD-1008", "ORD-1009", "EVT-1008-1")
     assert res["status"] == "CLEARED" and res["reevaluate"] == ["ORD-1008", "ORD-1009"]
+    assert ctx.conn.execute("SELECT cleared_by_event_id FROM duplicate_flags").fetchone()[0] == "EVT-1008-1"
     for oid in ("ORD-1008", "ORD-1009"):
         assert evaluate(ctx, oid).reasons == ["CONFIRMATION_REQUIRED"]  # not auto-ready
     confirm(ctx, "ORD-1008")
     assert commit_ready(ctx, "ORD-1008", 1)["status"] == "COMMITTED"
     assert "CONFIRMATION_REQUIRED" in commit_ready(ctx, "ORD-1009", 1)["reasons"]
+
+
+@pytest.mark.parametrize("reply", ["لا أنا عايز واحد بس", "الاتنين؟", "اه بس الغي واحد منهم", "أيوه",
+                                   "الاتنين", "مش عارف", "تمام"])
+def test_DT08_negative_ambiguous_or_contradictory_reply_keeps_both_on_hold(ctx, reply):
+    flag_duplicates(ctx, "ORD-1008")
+    request_duplicate_intent(ctx, "ORD-1008")
+    ingest_event(ctx, "ORD-1008", "EVT-1008-R", reply)
+    assert clear_duplicate_flag(ctx, "ORD-1008", "ORD-1009", "EVT-1008-R")["status"] == "NOT_EXPLICITLY_BOTH_INTENDED"
+    assert count(ctx.conn, "duplicate_flags", "status='OPEN'") == 1
+    for oid in ("ORD-1008", "ORD-1009"):
+        assert evaluate(ctx, oid).reasons == ["DUPLICATE_SUSPECTED"]
+        assert order_row(ctx.conn, oid)["lifecycle_state"] == "PENDING"
 
 
 def test_BR05_duplicate_arriving_after_confirmation_blocks_commit_persistently(ctx):

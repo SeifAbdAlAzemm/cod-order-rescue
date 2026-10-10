@@ -21,7 +21,7 @@ DB_PURPOSE = "SYNTHETIC_DEMO"
 
 # Children before parents, so drops respect foreign keys.
 _TABLES = [
-    "audit_log", "agent_runs", "escalations", "stock_reservations", "operations",
+    "audit_log", "agent_steps", "agent_runs", "escalations", "stock_reservations", "operations",
     "duplicate_flags", "event_results", "messages", "confirmation_requests",
     "order_items", "orders", "discounts", "shipping_rates", "governorate_aliases",
     "governorates", "inventory", "variants", "products", "db_meta",

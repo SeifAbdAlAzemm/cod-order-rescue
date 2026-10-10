@@ -1,4 +1,4 @@
--- COD Order Rescue - SQLite schema (schema version 2).
+-- COD Order Rescue - SQLite schema (schema version 3).
 -- Simulated order system for a synthetic shop. Not a real merchant integration.
 -- Money is stored as whole EGP integers (simulation assumption).
 
@@ -161,7 +161,8 @@ CREATE TABLE messages (
     order_id        TEXT NOT NULL REFERENCES orders(order_id),
     direction       TEXT NOT NULL CHECK (direction IN ('INBOUND', 'OUTBOUND')),
     kind            TEXT NOT NULL CHECK (kind IN
-                      ('CUSTOMER', 'CLARIFICATION', 'CONFIRMATION_REQUEST', 'INFO', 'ESCALATION_NOTICE')),
+                      ('CUSTOMER', 'CLARIFICATION', 'CONFIRMATION_REQUEST', 'DUPLICATE_INTENT_REQUEST', 'INFO',
+                       'ESCALATION_NOTICE')),
     body            TEXT NOT NULL,
     event_id        TEXT UNIQUE,           -- inbound idempotency key (same event delivered twice)
     idempotency_key TEXT UNIQUE,           -- outbound dedupe key
@@ -187,6 +188,10 @@ CREATE TABLE duplicate_flags (
     order_id_b  TEXT NOT NULL REFERENCES orders(order_id),
     match_basis TEXT NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('OPEN', 'CLEARED_BOTH_INTENDED', 'ESCALATED')),
+    -- Evidence binding: the deterministic question asked about THIS pair, on which order's conversation.
+    intent_order_id    TEXT,
+    intent_request_seq INTEGER,
+    cleared_by_event_id TEXT,
     created_at  TEXT NOT NULL,
     resolved_at TEXT,
     PRIMARY KEY (order_id_a, order_id_b),
@@ -232,15 +237,37 @@ CREATE TABLE agent_runs (
     event_id      TEXT,
     status        TEXT NOT NULL CHECK (status IN ('RUNNING', 'COMPLETED', 'STOPPED', 'FAILED')),
     error_class   TEXT CHECK (error_class IN
-                    ('LLM_ERROR', 'TOOL_ERROR', 'BUSINESS_RULE', 'BUDGET_EXCEEDED', 'TIMEOUT')),
+                    ('LLM_ERROR', 'TOOL_ERROR', 'VALIDATION_ERROR', 'BUSINESS_RULE', 'BUDGET_EXCEEDED', 'TIMEOUT')),
+    error_detail  TEXT,
     llm_calls     INTEGER NOT NULL DEFAULT 0,
     tool_calls    INTEGER NOT NULL DEFAULT 0,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd      REAL NOT NULL DEFAULT 0,
+    -- REPLAY runs make no API calls: cost is not applicable, never reported as model cost.
+    cost_basis    TEXT NOT NULL CHECK (cost_basis IN ('NOT_APPLICABLE_REPLAY', 'ESTIMATED_FROM_TOKEN_USAGE')),
+    final_outcome TEXT,
+    final_lifecycle TEXT,
+    agent_summary TEXT,
     latency_ms    INTEGER,
     started_at    TEXT NOT NULL,
-    ended_at      TEXT
+    ended_at      TEXT,
+    CHECK ((mode = 'REPLAY') = (cost_basis = 'NOT_APPLICABLE_REPLAY'))
+);
+
+-- One row per LLM call / tool call / stop, in order (inputs and outputs PII-redacted).
+CREATE TABLE agent_steps (
+    run_id      TEXT NOT NULL REFERENCES agent_runs(run_id),
+    step_no     INTEGER NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('LLM_CALL', 'TOOL_CALL', 'STOP')),
+    name        TEXT,
+    input_json  TEXT,
+    output_json TEXT,
+    latency_ms  INTEGER,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (run_id, step_no)
 );
 
 CREATE TABLE audit_log (
