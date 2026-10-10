@@ -186,7 +186,7 @@ def test_dashboard_renders_and_runs_replay_without_api_key():
     assert not at.exception
     next(b for b in at.button if b.label == "Run scenario").click().run()
     assert not at.exception
-    assert any('class="verdict-pass"' in m.value for m in at.markdown)
+    assert any('class="result result-pass"' in m.value for m in at.markdown)
     assert any("SAVED LIVE EVIDENCE" in m.value for m in at.markdown)  # visible without any key
     for view in ["📊 Business Owner", "🛠️ Operator Workspace", "🚀 Future Enhancements"]:
         at.sidebar.radio[0].set_value(view).run()
@@ -217,6 +217,47 @@ def test_saved_live_evidence_contains_no_secrets_paths_or_pii():
     raw += (PROJECT_ROOT / "docs" / "LIVE-EVIDENCE.md").read_text(encoding="utf-8")
     assert not re.search(r"[A-Za-z]:[\\/]|/Users/|AppData|sk-[a-z]{0,8}-?[A-Za-z0-9]{12,}|(?i:bearer)|API_KEY|run-[0-9a-f]{12}", raw)
     assert "العنوان:" not in raw and "عميل تجريبي" not in raw  # addresses/names omitted
+
+
+def test_metrics_include_saved_evidence_once_and_label_sources():
+    saved = svc.load_saved_live_evidence()
+    rows = svc.saved_metric_rows(saved)
+    assert len(rows) == 7 and {r["source"] for r in rows} == {"Live · saved evidence"}
+    assert sum(r["input_tokens"] for r in rows) == saved[0]["totals"]["input_tokens"]  # copied, not recomputed
+    assert [r["event_label"] for r in rows if r["scenario"] == "S02"] == ["S02·1", "S02·2", "S02·3"]
+    # a local LIVE report identical to the saved run is not counted twice
+    s01 = saved[0]["scenarios"][0]
+    dup_report = {"mode": "LIVE", "provider": "openai_compatible", "model": saved[0]["model"], "run_at": s01["recorded_at"],
+                  "scenarios": [{"id": "S01", "passed": True, "events": [
+                      {"event": e["event_id"], "result": {"run_id": "r", "llm_calls": 1}} for e in s01["events"]]}]}
+    replay_report = {"mode": "REPLAY", "provider": "replay", "model": "replay-script", "run_at": "x",
+                     "scenarios": [{"id": "S01", "passed": True, "events": [{"event": "E", "result": {"run_id": "r2"}}]}]}
+    combined = svc.combined_metric_rows([dup_report, replay_report], saved)
+    assert len(combined) == 8 and sum(r["source"] == "Replay · local run" for r in combined) == 1
+
+
+def test_every_safeguard_explains_the_risk_without_unsupported_live_claims():
+    rows = svc.evidence_matrix(svc.saved_evidence_as_reports(svc.load_saved_live_evidence()))
+    assert all(r["Risk prevented"].startswith("Prevents") for r in rows)
+    live = {r["Safeguard"]: r["Live evidence"] for r in rows}
+    assert live["Lifecycle protection (READY/SHIPPED)"] == "not run"          # S12/S13 never run LIVE
+    assert live["Bounded retries & timeouts"] == "not live-testable"
+    assert live["Version-bound confirmation"] == "not run"                    # S07-S09 never run LIVE
+    assert "S11 PASS" in live["Duplicate-order safeguards"] and "saved" in live["Duplicate-order safeguards"]
+
+
+def test_result_card_and_onboarding_collapse_after_run():
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(PROJECT_ROOT / "dashboard" / "app.py"), default_timeout=120).run()
+    assert at.expander[0].proto.expanded is True                 # first-time guide open
+    # regression: evidence and metrics tabs render BEFORE any scenario has been run
+    assert any(mt.label == "Provider-reported cost" for mt in at.metric) and len(at.dataframe) > 0
+    next(b for b in at.button if b.label == "Run scenario").click().run()
+    assert not at.exception
+    assert any('class="result result-pass"' in m.value and "Final agent outcome" in m.value for m in at.markdown)
+    assert at.expander[0].proto.expanded is False                # collapsed after a successful run
+    assert any("SAVED LIVE EVIDENCE — not a new execution" in m.value for m in at.markdown)
+    assert any(mt.label == "Input tokens" for mt in at.metric)  # metrics KPIs render (saved evidence by default)
 
 
 def test_saved_live_evidence_visible_in_fresh_clone_and_separate_from_replay():

@@ -27,8 +27,8 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cairo:wght@400;600&display=swap');
 html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Inter', 'Cairo', system-ui, sans-serif; }
-.block-container { padding-top: 1.6rem; max-width: 1400px; }
-.hero { background: linear-gradient(120deg, #0f766e 0%, #134e4a 100%); color: #fff; padding: 18px 22px;
+.block-container { padding-top: 1rem; max-width: 1400px; }
+.hero { background: linear-gradient(120deg, #0f766e 0%, #134e4a 100%); color: #fff; padding: 12px 20px;
         border-radius: 14px; margin-bottom: 14px; }
 .hero h1 { font-size: 1.55rem; margin: 0 0 4px 0; color: #fff; }
 .hero p { margin: 0; opacity: .9; font-size: .95rem; }
@@ -53,6 +53,16 @@ html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Inter', 'Cairo'
 .step code { font-size: .8rem; }
 .verdict-pass { background: #dcfce7; color: #14532d; padding: 10px 16px; border-radius: 10px; font-weight: 700; }
 .verdict-fail { background: #fee2e2; color: #7f1d1d; padding: 10px 16px; border-radius: 10px; font-weight: 700; }
+.result { border-radius: 14px; padding: 14px 20px; margin: 8px 0 10px 0; border: 2px solid; }
+.result-pass { background: #f0fdf4; border-color: #22c55e; }
+.result-fail { background: #fef2f2; border-color: #ef4444; }
+.r-verdict { font-size: 1.9rem; font-weight: 800; letter-spacing: .02em; line-height: 1.1; }
+.result-pass .r-verdict { color: #15803d; } .result-fail .r-verdict { color: #b91c1c; }
+.r-title { font-size: 1.15rem; font-weight: 700; color: #0f172a; margin: 2px 0 6px 0; }
+.saved-banner { background: #f5f3ff; border: 2px solid #8b5cf6; border-radius: 14px; padding: 12px 18px; margin-bottom: 10px; }
+.saved-banner .t { font-size: 1.2rem; font-weight: 800; color: #5b21b6; letter-spacing: .03em; }
+.pass-card { border: 1px solid #bbf7d0; background: #f0fdf4; border-radius: 12px; padding: 10px 14px; height: 100%; }
+.pass-card .v { color: #15803d; font-weight: 800; }
 .future { border: 1px dashed #94a3b8; border-radius: 12px; padding: 14px 16px; background: #f8fafc; height: 100%; }
 </style>
 """, unsafe_allow_html=True)
@@ -64,6 +74,19 @@ TONE = {"READY_FOR_DISPATCH": "green", "ON_HOLD": "amber", "ESCALATE_TO_HUMAN": 
 
 def esc(x) -> str:
     return html.escape("" if x is None else str(x))
+
+
+def num(n) -> str:
+    """Compact, screenshot-friendly integers: 4172 -> 4,172; 71610 -> 71.6k."""
+    n = int(n or 0)
+    return f"{n / 1000:.1f}k" if n >= 10000 else f"{n:,}"
+
+
+def money(x) -> str:
+    """Dollar amounts for st.metric; '$' is escaped so Markdown does not render '$..$' as LaTeX."""
+    if x is None:
+        return "n/a"
+    return r"\$0" if float(x) == 0 else rf"\${float(x):.4f}"
 
 
 def badge(text, tone: str | None = None) -> str:
@@ -202,11 +225,90 @@ def db_gate() -> bool:
 
 # ================================================================ Judge Lab
 
+def run_scenario_view() -> None:
+    """Run tab body. Its early returns end only this tab, never the other Judge Lab tabs."""
+    scenarios = svc.list_scenarios()
+    by_id = {s["id"]: s for s in scenarios}
+    c1, c2, c3 = st.columns([3.2, 1.6, 1.2])
+    sid = c1.selectbox("Scenario", list(by_id), format_func=lambda i: f"{i} · {by_id[i]['title']}"
+                       + (f"  [{', '.join(by_id[i]['test_cases'])}]" if by_id[i]["test_cases"] else ""))
+    mode = c2.radio("Mode", ["REPLAY", "LIVE"], horizontal=True)
+    sc = by_id[sid]
+    ack = True
+    if mode == "LIVE":
+        st.warning(f"LIVE calls **{settings.llm.model}** via `{settings.llm.provider}` (profile `{profile_name}`). "
+                   "External requests are sent; rate limits and possible billing apply. Nothing runs until you click Run.")
+        ack = st.checkbox("I understand this sends real requests to the selected provider.")
+        if not sc["live"]:
+            st.info(f"{sid} simulates model/API failures and is REPLAY-only.")
+    else:
+        st.caption("🔵 **REPLAY** - scripted model turns, no API calls. Proves harness, allowlist and guards, "
+                   "not model language understanding.")
+    if sc["faults"]:
+        st.caption("Injected fault for this scenario: " + ", ".join(k for k, v in sc["faults"].items() if v))
+    with st.expander(f"Customer messages in {sid} ({len(sc['events'])})"):
+        for e in sc["events"]:
+            bubble(e["text"], "customer", f"{e['order_id']} · {e['event_id']}")
+    disabled = mode == "LIVE" and (not ack or not sc["live"])
+    if c3.button("Run scenario", type="primary", width="stretch", disabled=disabled):
+        with st.status(f"Running {sid} in {mode}…", expanded=False) as status:
+            st.write("Seeding an isolated synthetic database…")
+            res = svc.run_scenario_ui(settings, sid, mode, ui_key)
+            status.update(label=f"{sid} finished" if res.get("ok") else f"{sid} could not run",
+                          state="complete" if res.get("ok") else "error")
+        st.session_state["judge_result"] = res
+        st.rerun()  # re-render with the result card on top and the guide collapsed
+
+    res = st.session_state.get("judge_result")
+    if not res:
+        st.caption("Results appear here after you run a scenario.")
+        return
+    if not res.get("ok"):
+        st.error(res.get("error", "run failed"))
+        for prob in (res.get("preflight") or {}).get("problems", []):
+            st.caption(f"• {prob}")
+        return
+    report = res["report"]
+    s = report["scenarios"][0]
+    events = s["events"]
+    verdict = "PASS" if s["passed"] else "FAIL"
+    final = events[-1]["result"] if events else {}
+    assertion_note = ("all assertions met" if s["passed"]
+                      else f"{len(s['failures'])} assertion(s) failed - see details below")
+    st.markdown(
+        f'<div class="result result-{verdict.lower()}"><div class="r-verdict">{"✅" if s["passed"] else "❌"} {verdict}</div>'
+        f'<div class="r-title">{esc(s["id"])} · {esc(s["title"])}</div>'
+        f'Final agent outcome: {badge(final.get("outcome") or "-", TONE.get(str(final.get("outcome")), "gray"))} '
+        f'order state: {badge(final.get("lifecycle_state") or "-")} &nbsp;·&nbsp; {badge(report["mode"])} '
+        f'{badge(report["model"], "gray")} <span class="muted">· {esc(assertion_note)}</span></div>',
+        unsafe_allow_html=True)
+    real = [e["result"] for e in events if not e["result"].get("replayed_from_saved_result")]
+    pc = [r.get("provider_cost_usd") for r in real if r.get("provider_cost_usd") is not None]
+    m = st.columns(6)
+    m[0].metric("Messages", len(events))
+    m[1].metric("Model calls", sum(r.get("llm_calls", 0) for r in real))
+    m[2].metric("Tool calls", sum(r.get("tool_calls", 0) for r in real))
+    m[3].metric("Tokens in / out", f"{num(sum(r.get('input_tokens', 0) for r in real))} / {num(sum(r.get('output_tokens', 0) for r in real))}")
+    m[4].metric("Run time", f"{sum(r.get('latency_ms') or 0 for r in real) / 1000:.1f} s")
+    m[5].metric("Cost est. / provider", f"{money(sum(r.get('cost_usd', 0) for r in real))} / "
+                + (money(sum(pc)) if pc else "n/a"),
+                help="Estimated = tokens x configured price. Provider = cost reported by the provider, if any.")
+    st.caption(report["label"])
+    st.markdown("##### Conversation, tool trace and state changes")
+    states: dict[str, dict] = {}
+    for i, ev in enumerate(events, start=1):
+        prev = states.get(ev["order_id"]) or svc.fixture_order_state(ev["order_id"])
+        states[ev["order_id"]] = render_result_event(i, ev, prev)
+    st.caption(f"Saved to `results/{esc(report['results_path'].split('results')[-1].lstrip(chr(92)).lstrip('/'))}`")
+
+
 def judge_lab() -> None:
     st.markdown('<div class="hero"><h1>🧪 Judge Lab</h1><p>Run the real agent loop on a scenario and inspect every '
                 'tool call, safety block and state change. REPLAY works with no API key.</p></div>',
                 unsafe_allow_html=True)
-    with st.expander("👋 First time here? 2-minute path", expanded=True):
+    ran_ok = bool((st.session_state.get("judge_result") or {}).get("ok"))
+    with st.expander("👋 First-time guide (2 minutes)" if ran_ok else "👋 First time here? 2-minute path",
+                     expanded=not ran_ok):
         st.markdown("1. Keep **S01 · Complete order confirmation** and mode **REPLAY**.\n"
                     "2. Click **Run scenario** - it takes about a second, no API key needed.\n"
                     "3. Read the conversation (Arabic, right-to-left), the agent's tool calls, and the PASS/FAIL "
@@ -220,74 +322,14 @@ def judge_lab() -> None:
         saved_live_evidence()
 
     with run_tab:
-        scenarios = svc.list_scenarios()
-        by_id = {s["id"]: s for s in scenarios}
-        c1, c2, c3 = st.columns([3.2, 1.6, 1.2])
-        sid = c1.selectbox("Scenario", list(by_id), format_func=lambda i: f"{i} · {by_id[i]['title']}"
-                           + (f"  [{', '.join(by_id[i]['test_cases'])}]" if by_id[i]["test_cases"] else ""))
-        mode = c2.radio("Mode", ["REPLAY", "LIVE"], horizontal=True)
-        sc = by_id[sid]
-        ack = True
-        if mode == "LIVE":
-            st.warning(f"LIVE calls **{settings.llm.model}** via `{settings.llm.provider}` (profile `{profile_name}`). "
-                       "External requests are sent; rate limits and possible billing apply. Nothing runs until you click Run.")
-            ack = st.checkbox("I understand this sends real requests to the selected provider.")
-            if not sc["live"]:
-                st.info(f"{sid} simulates model/API failures and is REPLAY-only.")
-        else:
-            st.info("REPLAY: scripted model turns, no API calls. Proves harness, allowlist and guards - "
-                    "not model language understanding.")
-        if sc["faults"]:
-            st.caption("Injected fault for this scenario: " + ", ".join(k for k, v in sc["faults"].items() if v))
-        with st.expander(f"Customer messages in {sid} ({len(sc['events'])})"):
-            for e in sc["events"]:
-                bubble(e["text"], "customer", f"{e['order_id']} · {e['event_id']}")
-        disabled = mode == "LIVE" and (not ack or not sc["live"])
-        if c3.button("Run scenario", type="primary", width="stretch", disabled=disabled):
-            with st.status(f"Running {sid} in {mode}…", expanded=False) as status:
-                st.write("Seeding an isolated synthetic database…")
-                res = svc.run_scenario_ui(settings, sid, mode, ui_key)
-                status.update(label=f"{sid} finished" if res.get("ok") else f"{sid} could not run",
-                              state="complete" if res.get("ok") else "error")
-            st.session_state["judge_result"] = res
-
-        res = st.session_state.get("judge_result")
-        if not res:
-            st.caption("Results appear here after you run a scenario.")
-            return
-        if not res.get("ok"):
-            st.error(res.get("error", "run failed"))
-            for prob in (res.get("preflight") or {}).get("problems", []):
-                st.caption(f"• {prob}")
-            return
-        report = res["report"]
-        s = report["scenarios"][0]
-        verdict = "PASS" if s["passed"] else "FAIL"
-        st.markdown(f'<div class="verdict-{verdict.lower()}">{verdict} · {esc(s["id"])} · {esc(s["title"])} '
-                    f'&nbsp; {badge(report["mode"])} {badge(report["model"], "gray")}</div>', unsafe_allow_html=True)
-        st.caption(report["label"])
-        events = s["events"]
-        m = st.columns(6)
-        real = [e["result"] for e in events if not e["result"].get("replayed_from_saved_result")]
-        m[0].metric("Events", len(events))
-        m[1].metric("Model calls", sum(r.get("llm_calls", 0) for r in real))
-        m[2].metric("Tool calls", sum(r.get("tool_calls", 0) for r in real))
-        m[3].metric("Tokens in / out", f"{sum(r.get('input_tokens', 0) for r in real)} / {sum(r.get('output_tokens', 0) for r in real)}")
-        m[4].metric("Latency", f"{sum(r.get('latency_ms') or 0 for r in real)} ms")
-        pc = [r.get("provider_cost_usd") for r in real if r.get("provider_cost_usd") is not None]
-        m[5].metric("Cost (est. / provider)", f"${sum(r.get('cost_usd', 0) for r in real):.4f} / "
-                    + (f"${sum(pc):.4f}" if pc else "n/a"))
-        before = svc.fixture_order_state(events[0]["order_id"]) if events else {}
-        states: dict[str, dict] = {}
-        for i, ev in enumerate(events, start=1):
-            prev = states.get(ev["order_id"]) or svc.fixture_order_state(ev["order_id"])
-            states[ev["order_id"]] = render_result_event(i, ev, prev)
-        st.caption(f"Saved to `results/{esc(report['results_path'].split('results')[-1].lstrip(chr(92)).lstrip('/'))}`")
+        run_scenario_view()
 
     with evidence_tab:
         history = svc.load_result_history()
-        st.markdown("Each safeguard is backed by **automated tests** (deterministic, no model), **REPLAY scenarios** "
-                    "(full agent loop, scripted model) and - only where a run exists - **LIVE** evidence with a real model.")
+        st.markdown("**What each safeguard protects against, and what proves it.** Evidence levels: "
+                    "**automated tests** (deterministic code, no model) · **REPLAY** (full agent loop, scripted model) · "
+                    "**LIVE** (real model; only where a recorded run exists, marked *saved* for the committed evidence). "
+                    "*not live-testable* = failure simulations that cannot be triggered on a real API.")
         saved = svc.saved_evidence_as_reports(svc.load_saved_live_evidence())
         st.dataframe(pd.DataFrame(svc.evidence_matrix(history + saved)), width="stretch", hide_index=True)
         st.caption("REPLAY/LIVE columns come from persisted result files in `results/` on this machine and from the "
@@ -304,38 +346,77 @@ def judge_lab() -> None:
 
     with metrics_tab:
         history = svc.load_result_history()
-        if not history:
-            st.info("No evaluation results on this machine yet (fresh clone). Run the REPLAY suite to generate measured data.")
-        if st.button("Run all REPLAY scenarios (no API calls)"):
-            with st.spinner("Running 25 scenarios on isolated databases…"):
-                rep = svc.run_suite(settings, "REPLAY")
-            st.success(f"REPLAY: {rep['passed']}/{rep['total']} scenarios passed")
-            history = svc.load_result_history()
-        if not history:
-            return
-        rows = pd.DataFrame(svc.metric_rows(history))
-        srows = pd.DataFrame(svc.scenario_rows(history))
-        modes = st.multiselect("Modes", ["REPLAY", "LIVE"], default=["LIVE"] if (rows["mode"] == "LIVE").any() else ["REPLAY"])
-        rows = rows[rows["mode"].isin(modes)] if not rows.empty else rows
+        saved = svc.load_saved_live_evidence()
+        rows = pd.DataFrame(svc.combined_metric_rows(history, saved))
         if rows.empty:
-            st.caption("No runs for the selected modes.")
+            st.info("No measurements yet. Run the REPLAY suite below to generate data.")
         else:
-            rows["label"] = rows["scenario"] + " · " + rows["event"].str.replace("EVT-", "", regex=False) + " · " + rows["model"].astype(str).str.split("/").str[-1]
-            c1, c2 = st.columns(2)
-            c1.markdown("**Tokens per event (input vs output)**")
-            c1.bar_chart(rows.set_index("label")[["input_tokens", "output_tokens"]])
-            c2.markdown("**Model calls and tool calls per event**")
-            c2.bar_chart(rows.set_index("label")[["llm_calls", "tool_calls"]])
-            c3, c4 = st.columns(2)
-            c3.markdown("**Latency per event (ms)**")
-            c3.bar_chart(rows.set_index("label")[["latency_ms"]])
-            c4.markdown("**Cost: local estimate vs provider-reported (USD)**")
-            c4.dataframe(rows[["label", "cost_basis", "estimated_cost_usd", "provider_cost_usd"]], hide_index=True,
-                         width="stretch")
-            st.caption("REPLAY rows have no model cost (scripted). Free-model LIVE runs show $0 by verified pricing; "
-                       "provider-reported cost appears only when the provider returns it.")
-        st.markdown("**Scenario results (all persisted runs)**")
-        st.dataframe(srows, hide_index=True, width="stretch")
+            sources = sorted(rows["source"].unique())
+            f1, f2, f3, f4 = st.columns([2.2, 2.2, 2.2, 1.4])
+            default_src = ["Live · saved evidence"] if "Live · saved evidence" in sources else sources[:1]
+            sel_src = f1.multiselect("Source", sources, default=default_src,
+                                     help="Live · saved evidence = committed recorded runs. Local runs = results on this machine.")
+            pool = rows[rows["source"].isin(sel_src)]
+            sel_model = f2.multiselect("Model", sorted(pool["model"].astype(str).unique()))
+            sel_scen = f3.multiselect("Scenario", sorted(pool["scenario"].unique()))
+            latest = f4.checkbox("Latest run only", value=True, help="Avoid counting repeated runs of the same scenario")
+            if sel_model:
+                pool = pool[pool["model"].astype(str).isin(sel_model)]
+            if sel_scen:
+                pool = pool[pool["scenario"].isin(sel_scen)]
+            if latest and not pool.empty:
+                last = pool.groupby(["source", "model", "scenario"])["run_at"].transform("max")
+                pool = pool[pool["run_at"] == last]
+            if pool.empty:
+                st.caption("No measurements for this selection.")
+            else:
+                if pool["mode"].nunique() > 1:
+                    st.warning("Mixed REPLAY and LIVE: REPLAY rows use scripted model turns (0 tokens, no model time). "
+                               "Compare them separately.")
+                pc = pool["provider_cost_usd"].dropna()
+                k = st.columns(4)
+                k[0].metric("Messages", len(pool))
+                k[1].metric("Model calls", int(pool["llm_calls"].sum()))
+                k[2].metric("Tool calls", int(pool["tool_calls"].sum()))
+                k[3].metric("Run time", f"{pool['latency_ms'].sum() / 1000:.1f} s",
+                            help=f"Mean {pool['latency_ms'].mean() / 1000:.1f} s per customer message")
+                k = st.columns(4)
+                k[0].metric("Input tokens", num(pool["input_tokens"].sum()), help=f"{int(pool['input_tokens'].sum()):,}")
+                k[1].metric("Output tokens", num(pool["output_tokens"].sum()), help=f"{int(pool['output_tokens'].sum()):,}")
+                k[2].metric("Estimated cost", money(pool["estimated_cost_usd"].sum()),
+                            help="Tokens x configured price (verified free model: $0).")
+                k[3].metric("Provider-reported cost", money(pc.sum()) if len(pc) else "n/a",
+                            help="Cost returned by the provider itself; n/a when not reported (e.g. REPLAY).")
+                chart = pool.copy()
+                chart["label"] = chart["event_label"]
+                dup = chart["label"].duplicated(keep=False)
+                chart.loc[dup, "label"] = chart.loc[dup, "label"] + " " + chart.loc[dup, "run_at"].astype(str).str[11:16]
+                chart = chart.set_index("label")
+                c1, c2, c3 = st.columns(3)
+                c1.markdown("**Tokens per message** (input vs output)")
+                c1.bar_chart(chart[["input_tokens", "output_tokens"]])
+                c2.markdown("**Model calls vs tool calls**")
+                c2.bar_chart(chart[["llm_calls", "tool_calls"]])
+                c3.markdown("**Run time per message (ms)**")
+                c3.bar_chart(chart[["latency_ms"]])
+                st.caption("Labels: S01·2 = scenario S01, customer message 2.")
+                with st.expander("Cost detail per message (estimated vs provider-reported)"):
+                    st.dataframe(pool[["event_label", "source", "model", "cost_basis", "estimated_cost_usd",
+                                       "provider_cost_usd"]].rename(columns={
+                        "event_label": "message", "estimated_cost_usd": "estimated ($)",
+                        "provider_cost_usd": "provider-reported ($)"}), hide_index=True, width="stretch")
+        with st.expander("Scenario results and Replay data"):
+            srows = svc.scenario_rows(history) + [
+                {"run_at": sc["recorded_at"], "mode": "LIVE (saved evidence)", "provider": "openai_compatible",
+                 "model": ev["model"], "scenario": sc["id"], "title": sc["title"], "passed": sc["passed"],
+                 "failures": len(sc["assertion_failures"])} for ev in saved for sc in ev["scenarios"]]
+            if srows:
+                st.dataframe(pd.DataFrame(srows), hide_index=True, width="stretch")
+            if st.button("Run all REPLAY scenarios (no API calls)"):
+                with st.spinner("Running 25 scenarios on isolated databases…"):
+                    rep_ = svc.run_suite(settings, "REPLAY")
+                st.success(f"REPLAY: {rep_['passed']}/{rep_['total']} scenarios passed")
+                st.rerun()
 
 
 def saved_live_evidence() -> None:
@@ -345,32 +426,33 @@ def saved_live_evidence() -> None:
         return
     for ev in evidence:
         t = ev["totals"]
-        st.markdown(f'<div class="card">{badge("SAVED LIVE EVIDENCE", "purple")} {badge("not a new execution", "gray")}'
-                    f'<br><b>{esc(ev["model"])}</b> via {esc(ev["provider"])} · profile <code>{esc(ev["profile"])}</code> · '
-                    f'pricing {esc(ev["pricing_status"])}<br><span class="muted">{esc(ev["notice"])} '
-                    f'{esc(ev["disclosure"]["data"].capitalize())}; {esc(ev["disclosure"]["messaging"])}.</span></div>',
-                    unsafe_allow_html=True)
+        st.markdown(f'<div class="saved-banner"><div class="t">📁 SAVED LIVE EVIDENCE — not a new execution</div>'
+                    f'Recorded real-model runs: <b>{esc(ev["model"])}</b> via {esc(ev["provider"])} · profile '
+                    f'<code>{esc(ev["profile"])}</code> · pricing {esc(ev["pricing_status"])}. Opening this tab makes no API call.'
+                    f'<br><span class="muted">{esc(ev["disclosure"]["data"].capitalize())}; '
+                    f'{esc(ev["disclosure"]["messaging"])}.</span></div>', unsafe_allow_html=True)
+        cards = st.columns(len(ev["scenarios"]))
+        for c, sc in zip(cards, ev["scenarios"]):
+            evs = sc["events"]
+            c.markdown(f'<div class="pass-card"><span class="v">{"✅ PASS" if sc["passed"] else "❌ FAIL"}</span> · '
+                       f'<b>{esc(sc["id"])}</b> {esc(", ".join(sc["test_cases"]))}<br>{esc(sc["title"])}<br>'
+                       f'<span class="muted">{len(evs)} messages · {sum(e["model_calls"] for e in evs)} model / '
+                       f'{sum(e["tool_calls"] for e in evs)} tool calls · {sum(e["input_tokens"] for e in evs):,} / '
+                       f'{sum(e["output_tokens"] for e in evs):,} tokens · model time '
+                       f'{sum(e["model_time_ms"] or 0 for e in evs) / 1000:.1f} s · final '
+                       f'{esc(evs[-1]["outcome"])}</span></div>', unsafe_allow_html=True)
+        st.write("")
         m = st.columns(6)
         m[0].metric("Scenarios passed", f"{t['scenarios_passed']}/{t['scenarios']}")
         m[1].metric("Model calls", t["model_calls"])
         m[2].metric("Tool calls", t["tool_calls"])
-        m[3].metric("Tokens in / out", f"{t['input_tokens']:,} / {t['output_tokens']:,}")
+        m[3].metric("Tokens in / out", f"{num(t['input_tokens'])} / {num(t['output_tokens'])}",
+                    help=f"{t['input_tokens']:,} input / {t['output_tokens']:,} output")
         m[4].metric("Model time", f"{t['model_time_ms_total'] / 1000:.1f} s",
                     help=f"Per model call {t['model_call_latency_ms_min']}–{t['model_call_latency_ms_max']} ms "
                          f"(mean {t['model_call_latency_ms_mean']} ms); total run time {t['run_latency_ms_total'] / 1000:.1f} s")
-        m[5].metric("Cost (est. / provider)", f"${t['estimated_cost_usd_total']:.4f} / ${t['provider_reported_cost_usd_total']:.4f}",
+        m[5].metric("Cost est. / provider", f"{money(t['estimated_cost_usd_total'])} / {money(t['provider_reported_cost_usd_total'])}",
                     help=ev["cost_note"])
-        rows = [{"Scenario": f"{s['id']} · {s['title']}", "Test cases": ", ".join(s["test_cases"]),
-                 "Result": "PASS" if s["passed"] else "FAIL", "Events": len(s["events"]),
-                 "Model calls": sum(e["model_calls"] for e in s["events"]),
-                 "Tool calls": sum(e["tool_calls"] for e in s["events"]),
-                 "Input tokens": sum(e["input_tokens"] for e in s["events"]),
-                 "Output tokens": sum(e["output_tokens"] for e in s["events"]),
-                 "Model time (ms)": sum(e["model_time_ms"] or 0 for e in s["events"]),
-                 "Est. cost ($)": sum(e["estimated_cost_usd"] for e in s["events"]),
-                 "Provider cost ($)": sum(e["provider_reported_cost_usd"] or 0 for e in s["events"]),
-                 "Recorded": s["recorded_at"]} for s in ev["scenarios"]]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
         st.markdown("**Safety observations**")
         for o in ev.get("safety_observations", []):
             st.markdown(f"- **{esc(o['title'])}** ({esc(o['where'])}): {esc(o['observation'])}")
@@ -410,6 +492,9 @@ def business_owner() -> None:
                 unsafe_allow_html=True)
     if not db_gate():
         return
+    st.info("ℹ️ This page shows the shop's **local demo database** (synthetic orders). Judge Lab scenarios run on "
+            "**separate temporary copies**, so running a scenario there does **not** change the numbers here. "
+            "To change demo orders, send a message in the **Operator Workspace**.")
     snap = svc.business_snapshot(settings.db_path)
     st.markdown("#### Order lifecycle - *authoritative order state*")
     cols = st.columns(max(len(snap["lifecycle"]), 1))

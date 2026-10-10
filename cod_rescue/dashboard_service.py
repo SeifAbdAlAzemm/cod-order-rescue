@@ -135,11 +135,12 @@ def metric_rows(reports: list[dict]) -> list[dict]:
     rows = []
     for r in reports:
         for s in r.get("scenarios", []):
-            for e in s.get("events", []):
+            for i, e in enumerate(s.get("events", []), start=1):
                 res = e.get("result", {})
                 if res.get("replayed_from_saved_result") or "run_id" not in res:
                     continue
                 rows.append({
+                    "source": f"{str(r.get('mode', '')).title()} · local run", "event_label": f"{s['id']}·{i}",
                     "run_at": r.get("run_at"), "mode": r.get("mode"), "provider": r.get("provider"),
                     "model": r.get("model"), "scenario": s["id"], "scenario_passed": s.get("passed"),
                     "event": e.get("event"), "llm_calls": res.get("llm_calls", 0), "tool_calls": res.get("tool_calls", 0),
@@ -149,6 +150,35 @@ def metric_rows(reports: list[dict]) -> list[dict]:
                     "error_kind": res.get("error_kind"), "outcome": res.get("outcome"),
                 })
     return rows
+
+
+def saved_metric_rows(saved: list[dict]) -> list[dict]:
+    """Per-event rows from SAVED LIVE EVIDENCE, same columns as metric_rows (values copied, never recomputed)."""
+    rows = []
+    for ev in saved:
+        for s in ev.get("scenarios", []):
+            for i, e in enumerate(s.get("events", []), start=1):
+                rows.append({
+                    "source": "Live · saved evidence", "event_label": f"{s['id']}·{i}",
+                    "run_at": s.get("recorded_at"), "mode": "LIVE", "provider": "openai_compatible",
+                    "model": ev.get("model"), "scenario": s["id"], "scenario_passed": s.get("passed"),
+                    "event": e["event_id"], "llm_calls": e["model_calls"], "tool_calls": e["tool_calls"],
+                    "input_tokens": e["input_tokens"], "output_tokens": e["output_tokens"],
+                    "latency_ms": e["run_latency_ms"], "estimated_cost_usd": e["estimated_cost_usd"],
+                    "provider_cost_usd": e["provider_reported_cost_usd"], "cost_basis": e["cost_basis"],
+                    "error_kind": e.get("error_kind"), "outcome": e["outcome"],
+                })
+    return rows
+
+
+def combined_metric_rows(reports: list[dict], saved: list[dict]) -> list[dict]:
+    """Saved LIVE evidence + local runs. A local LIVE run identical to a saved one (same model, scenario,
+    event and run time) is dropped so the same measurement is never counted twice."""
+    saved_rows = saved_metric_rows(saved)
+    keys = {(r["model"], r["scenario"], r["event"], r["run_at"]) for r in saved_rows}
+    local = [r for r in metric_rows(reports)
+             if not (r["mode"] == "LIVE" and (r["model"], r["scenario"], r["event"], r["run_at"]) in keys)]
+    return saved_rows + local
 
 
 def scenario_rows(reports: list[dict]) -> list[dict]:
@@ -202,21 +232,21 @@ def explain_tool_output(output_json: str | None) -> dict:
 
 
 EVIDENCE = [
-    {"safeguard": "Idempotent events & commit", "tests": ["test_TC15_DT14_*", "test_TC01_DT01_*", "test_same_operation_retried_concurrently_commits_once"],
+    {"safeguard": "Idempotent events & commit", "risk": "Prevents the same order message or confirmation from being processed twice (no duplicate replies, no double stock reservation).", "tests": ["test_TC15_DT14_*", "test_TC01_DT01_*", "test_same_operation_retried_concurrently_commits_once"],
      "replay": ["S14", "S01"], "live_capable": True},
-    {"safeguard": "Duplicate-order safeguards", "tests": ["test_TC11_*", "test_TC12_*", "test_DT08_negative_*", "test_concurrent_duplicates_are_both_held"],
+    {"safeguard": "Duplicate-order safeguards", "risk": "Prevents shipping two near-identical orders by mistake - or cancelling one without asking the customer.", "tests": ["test_TC11_*", "test_TC12_*", "test_DT08_negative_*", "test_concurrent_duplicates_are_both_held"],
      "replay": ["S10", "S11"], "live_capable": True},
-    {"safeguard": "Version-bound confirmation", "tests": ["test_TC09_AC04_*", "test_TC10_*", "test_AC01_DT05_*"],
+    {"safeguard": "Version-bound confirmation", "risk": "Prevents shipping an order the customer never confirmed, or confirmed before a size, address or price change.", "tests": ["test_TC09_AC04_*", "test_TC10_*", "test_AC01_DT05_*"],
      "replay": ["S07", "S08", "S09"], "live_capable": True},
-    {"safeguard": "Fail-closed errors (API, malformed, budget)", "tests": ["test_llm_errors_fail_closed_and_escalate", "test_tool_call_budget_stops_parallel_spam"],
+    {"safeguard": "Fail-closed errors (API, malformed, budget)", "risk": "Prevents a model or API failure from silently marking an order ready or sending a wrong reply.", "tests": ["test_llm_errors_fail_closed_and_escalate", "test_tool_call_budget_stops_parallel_spam"],
      "replay": ["S19", "S20", "S21", "S22", "S23"], "live_capable": False},
-    {"safeguard": "Bounded retries & timeouts", "tests": ["test_sdk_client_configured_with_bounded_retries_and_timeout", "test_per_attempt_timeout_fits_all_retries_in_remaining_budget"],
+    {"safeguard": "Bounded retries & timeouts", "risk": "Prevents a slow or failing AI provider from hanging the agent or running up cost.", "tests": ["test_sdk_client_configured_with_bounded_retries_and_timeout", "test_per_attempt_timeout_fits_all_retries_in_remaining_budget"],
      "replay": [], "live_capable": False},
-    {"safeguard": "Commit timeout recovery (no double allocation)", "tests": ["test_TC16_AC07_*", "test_AC07_*"],
+    {"safeguard": "Commit timeout recovery (no double allocation)", "risk": "Prevents a lost network response from causing a duplicate dispatch or double stock allocation.", "tests": ["test_TC16_AC07_*", "test_AC07_*"],
      "replay": ["S15"], "live_capable": True},
-    {"safeguard": "Lifecycle protection (READY/SHIPPED)", "tests": ["test_TC13_*", "test_TC14_*", "test_BR06_database_triggers_*"],
+    {"safeguard": "Lifecycle protection (READY/SHIPPED)", "risk": "Prevents edits to orders that are already packed, shipped, delivered or cancelled.", "tests": ["test_TC13_*", "test_TC14_*", "test_BR06_database_triggers_*"],
      "replay": ["S12", "S13"], "live_capable": True},
-    {"safeguard": "Prompt-injection resistance", "tests": ["test_prompt_marks_customer_text_untrusted_and_escapes_tags"],
+    {"safeguard": "Prompt-injection resistance", "risk": "Prevents a customer message from tricking the agent into skipping checks or granting discounts.", "tests": ["test_prompt_marks_customer_text_untrusted_and_escapes_tags"],
      "replay": ["S18"], "live_capable": True},
 ]
 
@@ -257,7 +287,8 @@ def evidence_matrix(reports: list[dict]) -> list[dict]:
                else f"{sid} not run" for sid in ev["replay"]]
         live = [f"{sid} {'PASS' if latest[('LIVE', sid)]['passed'] else 'FAIL'} ({latest[('LIVE', sid)]['model']})"
                 for sid in ev["replay"] if ("LIVE", sid) in latest]
-        rows.append({"Safeguard": ev["safeguard"], "Automated tests (pytest)": ", ".join(ev["tests"]),
+        rows.append({"Safeguard": ev["safeguard"], "Risk prevented": ev["risk"],
+                     "Automated tests (pytest)": ", ".join(ev["tests"]),
                      "Replay scenarios": ", ".join(rep) or "-",
                      "Live evidence": ", ".join(live) if live else ("not run" if ev["live_capable"] else "not live-testable")})
     return rows
