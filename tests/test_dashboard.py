@@ -187,7 +187,42 @@ def test_dashboard_renders_and_runs_replay_without_api_key():
     next(b for b in at.button if b.label == "Run scenario").click().run()
     assert not at.exception
     assert any('class="verdict-pass"' in m.value for m in at.markdown)
+    assert any("SAVED LIVE EVIDENCE" in m.value for m in at.markdown)  # visible without any key
     for view in ["📊 Business Owner", "🛠️ Operator Workspace", "🚀 Future Enhancements"]:
         at.sidebar.radio[0].set_value(view).run()
         assert not at.exception, view
     assert any("Not implemented" in m.value for m in at.markdown)
+
+
+# ---------------------------------------------------------------- saved LIVE evidence (version-controlled)
+
+def test_saved_live_evidence_is_consistent_and_labelled():
+    [ev] = svc.load_saved_live_evidence()
+    assert ev["evidence_type"] == "SAVED_LIVE_EVIDENCE" and "NOT a new LIVE execution" in ev["notice"]
+    assert ev["model"] == "nvidia/nemotron-3-super-120b-a12b:free"
+    assert [(s["id"], s["passed"]) for s in ev["scenarios"]] == [("S01", True), ("S02", True), ("S11", True)]
+    events = [e for s in ev["scenarios"] for e in s["events"]]
+    t = ev["totals"]
+    assert t["events"] == len(events) == 7
+    assert t["model_calls"] == sum(e["model_calls"] for e in events) == 22
+    assert (t["input_tokens"], t["output_tokens"]) == (71610, 4172)
+    assert t["model_time_ms_total"] == sum(sum(e["model_call_latencies_ms"]) for e in events)
+    assert all(len(e["model_call_latencies_ms"]) == e["model_calls"] for e in events)
+    assert any("Only three selected scenarios" in x for x in ev["limitations"])
+
+
+def test_saved_live_evidence_contains_no_secrets_paths_or_pii():
+    import re
+    raw = (PROJECT_ROOT / "evidence" / "live" / "nemotron-3-super-free_2026-10-10.json").read_text(encoding="utf-8")
+    raw += (PROJECT_ROOT / "docs" / "LIVE-EVIDENCE.md").read_text(encoding="utf-8")
+    assert not re.search(r"[A-Za-z]:[\\/]|/Users/|AppData|sk-[a-z]{0,8}-?[A-Za-z0-9]{12,}|(?i:bearer)|API_KEY|run-[0-9a-f]{12}", raw)
+    assert "العنوان:" not in raw and "عميل تجريبي" not in raw  # addresses/names omitted
+
+
+def test_saved_live_evidence_visible_in_fresh_clone_and_separate_from_replay():
+    assert svc.load_result_history() == []  # fresh clone: no local results
+    saved = svc.saved_evidence_as_reports(svc.load_saved_live_evidence())
+    rows = {r["Safeguard"]: r for r in svc.evidence_matrix(saved)}
+    assert "S11 PASS (nvidia/nemotron-3-super-120b-a12b:free · saved)" in rows["Duplicate-order safeguards"]["Live evidence"]
+    assert "not run" in rows["Duplicate-order safeguards"]["Replay scenarios"]  # saved LIVE never counted as REPLAY
+    assert svc.metric_rows(svc.load_result_history()) == []

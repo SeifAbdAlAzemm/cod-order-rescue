@@ -9,7 +9,7 @@ A local Streamlit demo on top of the existing backend (evaluation engine, agent 
 ## Views (demo views, not authenticated roles)
 | View | What it shows | Writes |
 |---|---|---|
-| **Judge Lab** | Run any evaluation scenario (REPLAY default; LIVE opt-in), PASS/FAIL assertions, Arabic conversation (RTL), every persisted tool call with results and plain-language reasons for safety blocks, state transitions, structured error diagnostics. Tabs: safety evidence matrix (automated tests vs REPLAY vs LIVE) and metrics charts from persisted results. | Isolated per-scenario databases under `results/` only |
+| **Judge Lab** | Run any evaluation scenario (REPLAY default; LIVE opt-in), PASS/FAIL assertions, Arabic conversation (RTL), every persisted tool call with results and plain-language reasons for safety blocks, state transitions, structured error diagnostics. Tabs: **Saved Live evidence** (recorded real-model runs from `evidence/live/`, labelled SAVED LIVE EVIDENCE - viewing it makes no API call), safety evidence matrix (automated tests vs REPLAY vs LIVE) and metrics charts from persisted results. | Isolated per-scenario databases under `results/` only |
 | **Business Owner** | Synthetic demo DB: lifecycle counts vs agent outcome counts (distinct concepts), orders, human exception queue, agent runs, tokens/latency/estimated vs provider-reported cost. | Explicit "create/reset demo DB" only |
 | **Operator Workspace** | Pick an order, read its conversation, send a simulated customer message through the real runtime, redeliver the same event to see idempotency. REPLAY plays predefined scenario messages only (scripted model turns); LIVE accepts free text. | Demo DB via the agent runtime and guarded tools |
 | **Future Enhancements** | Roadmap, clearly labelled not implemented. | None |
@@ -26,6 +26,8 @@ A local Streamlit demo on top of the existing backend (evaluation engine, agent 
 - **Automated tests** — deterministic pytest suite (no model). Button "Run automated test suite now" measures it on the judge's machine.
 - **REPLAY** — full agent loop with scripted model turns; proves harness, allowlist and guards; not model understanding.
 - **LIVE** — real model; shown only where a persisted LIVE result exists (`results/live/<provider>/<model>/eval-*.json`).
+- **SAVED LIVE** — version-controlled snapshot of recorded LIVE runs (`evidence/live/*.json`, report [LIVE-EVIDENCE.md](LIVE-EVIDENCE.md)), built by `scripts/build_live_evidence.py` from local results. Visible in a fresh clone without any key; never counted as REPLAY.
+
 A fresh clone has no results: the Metrics tab shows an empty state and a "Run all REPLAY scenarios" button.
 
 ## Known limitations

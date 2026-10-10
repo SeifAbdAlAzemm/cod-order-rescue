@@ -221,6 +221,30 @@ EVIDENCE = [
 ]
 
 
+SAVED_EVIDENCE_DIR = PROJECT_ROOT / "evidence" / "live"
+
+
+def load_saved_live_evidence(evidence_dir: Path | None = None) -> list[dict]:
+    """Version-controlled SAVED LIVE EVIDENCE snapshots (recorded runs; viewing them is not a new execution)."""
+    out = []
+    for f in sorted((evidence_dir or SAVED_EVIDENCE_DIR).glob("*.json")):
+        try:
+            ev = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if ev.get("evidence_type") == "SAVED_LIVE_EVIDENCE":
+            ev["_file"] = f.name
+            out.append(ev)
+    return out
+
+
+def saved_evidence_as_reports(saved: list[dict]) -> list[dict]:
+    """Minimal LIVE pseudo-reports so the evidence matrix can cite saved runs (labelled 'saved')."""
+    return [{"mode": "LIVE", "run_at": s["recorded_at"], "model": f"{ev['model']} · saved",
+             "scenarios": [{"id": s["id"], "passed": s["passed"]}]}
+            for ev in saved for s in ev.get("scenarios", [])]
+
+
 def evidence_matrix(reports: list[dict]) -> list[dict]:
     """Per safeguard: automated tests (names), latest REPLAY status, and LIVE status only if a LIVE run exists."""
     latest: dict[tuple, dict] = {}

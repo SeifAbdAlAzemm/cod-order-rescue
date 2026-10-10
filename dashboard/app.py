@@ -213,7 +213,11 @@ def judge_lab() -> None:
                     "assertions. Then try **S08** (contradictory \"تمام\") or **S11** (duplicate orders, customer says no).\n\n"
                     "**REPLAY** = scripted model turns through the real harness and guards (simulated model). "
                     "**LIVE** = the selected real model decides; external requests, rate limits and possible billing apply.")
-    run_tab, evidence_tab, metrics_tab = st.tabs(["▶ Run a scenario", "🛡️ Safety evidence", "📈 Metrics"])
+    run_tab, saved_tab, evidence_tab, metrics_tab = st.tabs(
+        ["▶ Run a scenario", "📁 Saved Live evidence", "🛡️ Safety evidence", "📈 Metrics"])
+
+    with saved_tab:
+        saved_live_evidence()
 
     with run_tab:
         scenarios = svc.list_scenarios()
@@ -284,8 +288,10 @@ def judge_lab() -> None:
         history = svc.load_result_history()
         st.markdown("Each safeguard is backed by **automated tests** (deterministic, no model), **REPLAY scenarios** "
                     "(full agent loop, scripted model) and - only where a run exists - **LIVE** evidence with a real model.")
-        st.dataframe(pd.DataFrame(svc.evidence_matrix(history)), width="stretch", hide_index=True)
-        st.caption("REPLAY/LIVE columns are computed from persisted result files in `results/`. Missing = not run on this machine.")
+        saved = svc.saved_evidence_as_reports(svc.load_saved_live_evidence())
+        st.dataframe(pd.DataFrame(svc.evidence_matrix(history + saved)), width="stretch", hide_index=True)
+        st.caption("REPLAY/LIVE columns come from persisted result files in `results/` on this machine and from the "
+                   "version-controlled saved LIVE evidence (marked 'saved'). 'not run' = no such run recorded.")
         c1, c2 = st.columns([1, 3])
         if c1.button("Run automated test suite now"):
             with st.spinner("Running pytest (about 30 seconds)…"):
@@ -330,6 +336,70 @@ def judge_lab() -> None:
                        "provider-reported cost appears only when the provider returns it.")
         st.markdown("**Scenario results (all persisted runs)**")
         st.dataframe(srows, hide_index=True, width="stretch")
+
+
+def saved_live_evidence() -> None:
+    evidence = svc.load_saved_live_evidence()
+    if not evidence:
+        st.info("No saved LIVE evidence found in `evidence/live/`.")
+        return
+    for ev in evidence:
+        t = ev["totals"]
+        st.markdown(f'<div class="card">{badge("SAVED LIVE EVIDENCE", "purple")} {badge("not a new execution", "gray")}'
+                    f'<br><b>{esc(ev["model"])}</b> via {esc(ev["provider"])} · profile <code>{esc(ev["profile"])}</code> · '
+                    f'pricing {esc(ev["pricing_status"])}<br><span class="muted">{esc(ev["notice"])} '
+                    f'{esc(ev["disclosure"]["data"].capitalize())}; {esc(ev["disclosure"]["messaging"])}.</span></div>',
+                    unsafe_allow_html=True)
+        m = st.columns(6)
+        m[0].metric("Scenarios passed", f"{t['scenarios_passed']}/{t['scenarios']}")
+        m[1].metric("Model calls", t["model_calls"])
+        m[2].metric("Tool calls", t["tool_calls"])
+        m[3].metric("Tokens in / out", f"{t['input_tokens']:,} / {t['output_tokens']:,}")
+        m[4].metric("Model time", f"{t['model_time_ms_total'] / 1000:.1f} s",
+                    help=f"Per model call {t['model_call_latency_ms_min']}–{t['model_call_latency_ms_max']} ms "
+                         f"(mean {t['model_call_latency_ms_mean']} ms); total run time {t['run_latency_ms_total'] / 1000:.1f} s")
+        m[5].metric("Cost (est. / provider)", f"${t['estimated_cost_usd_total']:.4f} / ${t['provider_reported_cost_usd_total']:.4f}",
+                    help=ev["cost_note"])
+        rows = [{"Scenario": f"{s['id']} · {s['title']}", "Test cases": ", ".join(s["test_cases"]),
+                 "Result": "PASS" if s["passed"] else "FAIL", "Events": len(s["events"]),
+                 "Model calls": sum(e["model_calls"] for e in s["events"]),
+                 "Tool calls": sum(e["tool_calls"] for e in s["events"]),
+                 "Input tokens": sum(e["input_tokens"] for e in s["events"]),
+                 "Output tokens": sum(e["output_tokens"] for e in s["events"]),
+                 "Model time (ms)": sum(e["model_time_ms"] or 0 for e in s["events"]),
+                 "Est. cost ($)": sum(e["estimated_cost_usd"] for e in s["events"]),
+                 "Provider cost ($)": sum(e["provider_reported_cost_usd"] or 0 for e in s["events"]),
+                 "Recorded": s["recorded_at"]} for s in ev["scenarios"]]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.markdown("**Safety observations**")
+        for o in ev.get("safety_observations", []):
+            st.markdown(f"- **{esc(o['title'])}** ({esc(o['where'])}): {esc(o['observation'])}")
+        for s in ev["scenarios"]:
+            with st.expander(f"{'✅' if s['passed'] else '❌'} {s['id']} · {s['title']} - event by event"):
+                for e in s["events"]:
+                    with st.container(border=True):
+                        st.markdown(f"**{esc(e['event_id'])}** · `{esc(e['order_id'])}` &nbsp; "
+                                    f"{state_badges(e['lifecycle_state'], e['outcome'], e['order_version'])}",
+                                    unsafe_allow_html=True)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            bubble(e["customer_message"], "customer", "customer")
+                            for r in e["agent_replies"]:
+                                bubble(r["text"], "shop", f"shop · {r['kind']} · {r['source']}")
+                        with c2:
+                            for a in e["tool_actions"]:
+                                cls = "step-ok" if a["ok"] else "step-block"
+                                blk = f'<div class="muted">{esc(a["safety_block"])}</div>' if a.get("safety_block") else ""
+                                det = f'<div class="muted">{esc(a["detail"])}</div>' if a["detail"] else ""
+                                st.markdown(f'<div class="step {cls}">{"✅" if a["ok"] else "⛔"} <b>{esc(a["tool"])}</b> → '
+                                            f'<code>{esc(a["status"])}</code>{det}{blk}</div>', unsafe_allow_html=True)
+                            st.caption(f"{e['model_calls']} model / {e['tool_calls']} tool calls · "
+                                       f"{e['input_tokens']:,}/{e['output_tokens']:,} tokens · model {e['model_time_ms']:,} ms "
+                                       f"of {e['run_latency_ms']:,} ms")
+        st.markdown("**Limitations**")
+        for lim in ev["limitations"]:
+            st.markdown(f"- {esc(lim)}")
+        st.caption(f"Source snapshot: evidence/live/{esc(ev['_file'])} · full report: docs/LIVE-EVIDENCE.md")
 
 
 # ================================================================ Business Owner
