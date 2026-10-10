@@ -42,7 +42,7 @@ class AnthropicLLM:
     mode = "LIVE"
     provider = "anthropic"
 
-    def __init__(self, settings, profile=None, client=None):
+    def __init__(self, settings, profile=None, client=None, api_key: str | None = None):
         self.settings = settings
         self.profile = profile or settings.llm.profile
         self.model = self.profile.model
@@ -51,10 +51,16 @@ class AnthropicLLM:
         except ImportError as e:  # pragma: no cover
             raise LLMError("SDK_MISSING", "pip install -r requirements.txt") from e
         self._anthropic = anthropic
-        # Credentials come from the env var named by the profile; never from code or config.
+        # Credentials: an in-memory key for this invocation only (dashboard), else the env var named by the
+        # profile; never from code or config. The endpoint is always explicit and allowlisted, so an
+        # ANTHROPIC_BASE_URL environment variable cannot redirect the key elsewhere.
         import os
+        from cod_rescue.agent.providers.capabilities import key_destination
+        url, trusted = key_destination(self.profile)
+        if not trusted:
+            raise LLMError("UNSUPPORTED_CAPABILITY", f"refusing to send credentials to untrusted host {url!r}")
         self.client = client or anthropic.Anthropic(
-            api_key=os.environ.get(self.profile.api_key_env) or None,
+            api_key=api_key or os.environ.get(self.profile.api_key_env) or None, base_url=url,
             timeout=settings.llm.request_timeout_s, max_retries=settings.llm.max_retries)
 
     def attempt_timeout(self, remaining_s: float | None) -> float:

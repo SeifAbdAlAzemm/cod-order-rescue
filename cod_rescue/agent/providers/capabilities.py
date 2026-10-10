@@ -11,6 +11,17 @@ import os
 import urllib.request
 
 OPENROUTER_HOST = "openrouter.ai"
+ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com"
+# Hosts a credential may be sent to. Anything else (including a localhost server) never receives a key.
+TRUSTED_KEY_HOSTS = {"api.anthropic.com", "openrouter.ai", "router.huggingface.co", "api.openai.com"}
+
+
+def key_destination(profile) -> tuple[str, bool]:
+    """(endpoint URL, trusted?) for a profile. Only https endpoints on allowlisted hosts are trusted."""
+    from urllib.parse import urlparse
+    url = profile.base_url or (ANTHROPIC_DEFAULT_URL if profile.provider == "anthropic" else "")
+    parsed = urlparse(url)
+    return url, parsed.scheme == "https" and parsed.hostname in TRUSTED_KEY_HOSTS and not parsed.username
 
 
 def is_openrouter(profile) -> bool:
@@ -42,15 +53,20 @@ def openrouter_model_metadata(profile, fetch=None) -> dict | None:
             "context_length": m.get("context_length")}
 
 
-def check_profile(settings, profile, fetch=None) -> dict:
-    """Returns a report; never makes a billable call and never prints or returns the key."""
+def check_profile(settings, profile, fetch=None, api_key: str | None = None) -> dict:
+    """Returns a report; never makes a billable call and never prints or returns the key.
+    api_key: optional in-memory key (dashboard); otherwise the env var named by the profile."""
+    key = api_key or os.environ.get(profile.api_key_env)
+    url, trusted = key_destination(profile)
     report = {"profile": profile.name, "provider": profile.provider, "model": profile.model,
               "base_url": profile.base_url or "(provider default)", "api_key_env": profile.api_key_env,
-              "key_present": bool(os.environ.get(profile.api_key_env)),
+              "key_present": bool(key), "key_destination_trusted": trusted,
               "pricing_status": profile.pricing.status, "pricing_source": profile.pricing.source,
               "model_listed": None, "tool_support": "unknown", "pricing_check": "not_checked", "problems": []}
     if profile.pricing.status == "unknown":
         report["problems"].append("pricing unknown: LIVE refused (missing pricing is never treated as free)")
+    if not trusted:
+        report["problems"].append(f"endpoint {url!r} is not an allowlisted https host: credentials are never sent there")
     try:
         if is_openrouter(profile):
             meta = openrouter_model_metadata(profile, fetch)
@@ -78,16 +94,15 @@ def check_profile(settings, profile, fetch=None) -> dict:
         elif profile.provider == "anthropic":
             if report["key_present"]:
                 import anthropic
-                m = anthropic.Anthropic(api_key=os.environ[profile.api_key_env]).models.retrieve(profile.model)
+                m = anthropic.Anthropic(api_key=key, base_url=url).models.retrieve(profile.model)
                 report["model_listed"] = m.id == profile.model
                 report["tool_support"] = "declared (Messages API tool use)"
             if profile.pricing.status == "verified_free":
                 report["problems"].append("verified_free cannot be confirmed for this provider automatically")
         else:  # generic OpenAI-compatible endpoint
-            if report["key_present"]:
+            if report["key_present"] and trusted:
                 import openai
-                ids = [m.id for m in openai.OpenAI(api_key=os.environ[profile.api_key_env],
-                                                   base_url=profile.base_url).models.list()]
+                ids = [m.id for m in openai.OpenAI(api_key=key, base_url=profile.base_url).models.list()]
                 report["model_listed"] = profile.model in ids
             report["tool_support"] = "unknown (endpoint does not declare capabilities)"
             if profile.pricing.status == "verified_free":

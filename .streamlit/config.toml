@@ -1,0 +1,16 @@
+# COD Rescue Control Center - local demo settings.
+[server]
+headless = true              # no first-run email prompt; open http://localhost:8501
+address = "localhost"        # local demonstration only: not exposed on the network
+runOnSave = false
+
+[client]
+showErrorDetails = "none"    # visitors never see stack traces
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#0f766e"

@@ -59,7 +59,7 @@ class OpenAICompatibleLLM:
     mode = "LIVE"
     provider = "openai_compatible"
 
-    def __init__(self, settings, profile=None, client=None):
+    def __init__(self, settings, profile=None, client=None, api_key: str | None = None):
         self.settings = settings
         self.profile = profile or settings.llm.profile
         self.model = self.profile.model
@@ -73,8 +73,13 @@ class OpenAICompatibleLLM:
             headers["X-Title"] = self.profile.options["app_title"]
         if self.profile.options.get("app_url"):
             headers["HTTP-Referer"] = self.profile.options["app_url"]
+        # In-memory per-invocation key (dashboard) takes precedence over the env var named by the profile.
+        # A real key is only ever sent to an allowlisted https host; others (e.g. a local server) get a placeholder.
+        from cod_rescue.agent.providers.capabilities import key_destination
+        _, trusted = key_destination(self.profile)
+        real_key = api_key or os.environ.get(self.profile.api_key_env)
         self.client = client or openai.OpenAI(
-            api_key=os.environ.get(self.profile.api_key_env) or "missing",
+            api_key=(real_key if trusted else None) or "no-key-sent",
             base_url=self.profile.base_url,
             timeout=settings.llm.request_timeout_s, max_retries=settings.llm.max_retries,
             default_headers=headers or None)

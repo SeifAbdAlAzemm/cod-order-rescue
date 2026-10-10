@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import time
 from datetime import datetime
@@ -99,12 +100,17 @@ def run_scenario(scenario: dict, settings: Settings, mode: str, work_dir: Path, 
         conn.close()
 
 
+def results_root() -> Path:
+    """results/ by default; COD_RESCUE_RESULTS_DIR redirects it (tests, isolated demos)."""
+    return Path(os.environ.get("COD_RESCUE_RESULTS_DIR") or PROJECT_ROOT / "results")
+
+
 def results_dir(settings: Settings, mode: str) -> Path:
     """REPLAY is provider-independent; LIVE results are kept per provider and model."""
     if mode == "REPLAY":
-        return PROJECT_ROOT / "results" / "replay"
+        return results_root() / "replay"
     p = settings.llm.profile
-    return PROJECT_ROOT / "results" / "live" / p.provider / re.sub(r"[^A-Za-z0-9._-]+", "_", p.model)
+    return results_root() / "live" / p.provider / re.sub(r"[^A-Za-z0-9._-]+", "_", p.model)
 
 
 def run_suite(settings: Settings, mode: str, scenario_ids: list[str] | None = None,

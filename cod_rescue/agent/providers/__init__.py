@@ -13,13 +13,14 @@ REGISTRY = {
 }
 
 
-def build_provider(settings, profile=None):
+def build_provider(settings, profile=None, api_key: str | None = None):
+    """api_key: optional in-memory credential for this invocation only; never stored or logged."""
     profile = profile or settings.llm.profile
     try:
         cls = REGISTRY[profile.provider]
     except KeyError:
         raise LLMError("UNSUPPORTED_CAPABILITY", f"unknown provider {profile.provider!r}") from None
-    return cls(settings, profile)
+    return cls(settings, profile, api_key=api_key)
 
 
 __all__ = ["REGISTRY", "build_provider", "AnthropicLLM", "OpenAICompatibleLLM", "ReplayLLM",
