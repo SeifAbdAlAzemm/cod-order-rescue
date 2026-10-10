@@ -40,7 +40,7 @@ Test case definitions are those of `TEST-SCENARIOS.md`, unchanged and never renu
 | TC-15 | Same event delivered twice | ORD-1001 / ORD-1007 | DT-14 | PASS (tool level) `test_TC15_DT14_*` | PASS S14 | NOT RUN |
 | TC-16 | Commit timeout after possible success | ORD-1015 | AC-07 | PASS `test_TC16_AC07_*`, `test_AC07_*` (3 tests) | PASS S15 | NOT RUN |
 
-Last runs (provider abstraction): `python -m pytest` → 307 passed (deterministic + replay + offline provider conformance); `python -m cod_rescue eval` → REPLAY 25/25 scenarios passed. LIVE: not run for any provider (no API credentials; no model call has been made).
+Last runs (provider abstraction): `python -m pytest` → 318 passed (deterministic + replay + offline provider conformance); `python -m cod_rescue eval` → REPLAY 25/25 scenarios passed. LIVE: one attempt (S01, openrouter-gemma-free) failed before any model response — HTTP 429 upstream rate limit; no successful LIVE result for any provider yet.
 
 ## Robustness scenarios (Replay; not tied to a TC)
 | Scenario | Condition | Replay | Live |

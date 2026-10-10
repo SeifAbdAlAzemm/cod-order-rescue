@@ -45,6 +45,7 @@ Shared across profiles: `max_tokens`, per-attempt timeout (capped by the remaini
 |---|---|---|---|---|
 | `anthropic-haiku` | anthropic | `claude-haiku-5-5` | known ($0.10 / $0.50 per 1M) | adapter offline-tested; LIVE not run |
 | `openrouter-gemma-free` | openai_compatible (OpenRouter) | `google/gemma-4-31b-it:free` | verified_free (listing, 2026-10-10) | adapter offline-tested; listing checked; LIVE not run |
+| `openrouter-nemotron-free` | openai_compatible (OpenRouter, upstream Nvidia) | `nvidia/nemotron-3-super-120b-a12b:free` | verified_free (listing, 2026-10-10 16:26) | backup; manual selection only (no automatic fallback); LIVE not run |
 | Hugging Face router / OpenAI | openai_compatible | your choice | your choice | **template only, not tested** |
 
 Templates (commented in `settings.toml`): Hugging Face `https://router.huggingface.co/v1` with `api_key_env="HF_TOKEN"`; OpenAI `https://api.openai.com/v1` with `api_key_env="OPENAI_API_KEY"`.
@@ -60,6 +61,9 @@ Per run we record `cost_usd` (local estimate = tokens × configured prices) and,
 - **Declared** — model metadata says it supports tools (`check-provider`; OpenRouter `supported_parameters` contains `tools`).
 - **Verified** — a LIVE evaluation in which the real model produced a schema-valid tool call that the harness executed (`tool_support_verified_live` in the LIVE report). Never assumed.
 - A provider error saying tools are unsupported maps to `UNSUPPORTED_CAPABILITY` → the run fails closed and escalates.
+
+## Error diagnostics
+Every failed model call records structured, sanitized fields in the run trace and result: `error_kind` (e.g. `RATE_LIMIT`, `AUTH`, `UNSUPPORTED_CAPABILITY`), `http_status`, `provider_error_code`, `upstream_provider` (e.g. OpenRouter's `provider_name`), `retry_after`, and a sanitized provider message (credential-like strings masked, length-bounded). `error_class` stays `LLM_ERROR`/`TIMEOUT` and the run still fails closed. Example (first OpenRouter S01 attempt): `RATE_LIMIT`, HTTP 429, code 429, upstream Google AI Studio — the free endpoint was rate-limited upstream.
 
 Free models can be rate-limited, slower, or change availability; OpenRouter's free endpoints may have their own data policies. This project sends only synthetic data.
 

@@ -43,6 +43,18 @@ price_output_per_mtok = 0.0
 pricing_source = "OpenRouter GET /api/v1/models: prompt=0, completion=0, supported_parameters includes tools (2026-10-10); re-verified before LIVE"
 options = { openrouter_usage = true, app_title = "COD Order Rescue (hackathon MVP)" }
 
+# Backup free model on a different upstream (Nvidia). Selected manually only; no automatic fallback.
+[llm.profiles.openrouter-nemotron-free]
+provider = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
+pricing = "verified_free"
+price_input_per_mtok = 0.0
+price_output_per_mtok = 0.0
+pricing_source = "OpenRouter GET /api/v1/models: prompt=0, completion=0, supported_parameters includes tools; single endpoint Nvidia (2026-10-10T16:26+03:00); re-verified before LIVE"
+options = { openrouter_usage = true, app_title = "COD Order Rescue (hackathon MVP)" }
+
 # Templates (NOT tested in this slice) - copy into a new [llm.profiles.<name>] table and fill in:
 #   OpenRouter paid: provider="openai_compatible", base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY", pricing="known"
 #   Hugging Face:    provider="openai_compatible", base_url="https://router.huggingface.co/v1", api_key_env="HF_TOKEN"

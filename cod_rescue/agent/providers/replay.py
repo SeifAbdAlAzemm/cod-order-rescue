@@ -30,8 +30,10 @@ class ReplayLLM:
             raise LLMError("SCRIPT_EXHAUSTED", "replay script has no more turns")
         step = self.script[self.calls]
         self.calls += 1
-        if "error" in step:
-            raise LLMError(step["error"], f"simulated {step['error']}")
+        if "error" in step:  # optional simulated diagnostics: http_status, provider_error_code, ...
+            diag = {k: step[k] for k in ("http_status", "provider_error_code", "upstream_provider", "retry_after")
+                    if k in step}
+            raise LLMError(step["error"], step.get("message", f"simulated {step['error']}"), **diag)
         calls = [ToolCall(f"replay_{self.calls}_{i}", c.get("name"), c.get("input", {}))
                  for i, c in enumerate(step.get("tool_calls", []))]
         check_stop(step.get("stop_reason", "tool_use" if calls else "end_turn"))

@@ -49,6 +49,7 @@ class _Run:
         self.input_tokens = self.output_tokens = 0
         self.cost = 0.0                      # local estimate from token usage x configured prices
         self.provider_cost: float | None = None   # what the provider itself reported, if anything
+        self.llm_error: dict | None = None        # structured diagnostics of a failed model call
         self.started = time.monotonic()
         ctx.run_id = self.run_id
         ctx.conn.execute(
@@ -108,8 +109,9 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
             try:
                 resp = llm.create(SYSTEM_PROMPT, TOOL_SPECS, conversation, remaining_s=remaining)
             except LLMError as e:
-                run.trace("LLM_CALL", llm.model, None, {"error": e.kind, "message": str(e)[:300]})
-                raise _Stop("TIMEOUT" if e.kind == "TIMEOUT" else "LLM_ERROR", f"{e.kind}: {str(e)[:200]}")
+                run.llm_error = e.diagnostics()  # structured + sanitized; never headers or keys
+                run.trace("LLM_CALL", llm.model, None, {"error": e.kind, **run.llm_error})
+                raise _Stop("TIMEOUT" if e.kind == "TIMEOUT" else "LLM_ERROR", f"{e.kind}: {e.detail[:500]}")
             run.llm_calls += 1
             run.input_tokens += resp.input_tokens
             run.output_tokens += resp.output_tokens
@@ -172,6 +174,8 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
         "profile": run.profile.name if run.profile else None, "order_id": order_id, "event_id": event_id,
         "outcome": o.agent_outcome, "lifecycle_state": o.lifecycle_state, "version": o.version,
         "reasons": reasons, "status": status, "error_class": error_class, "error_detail": error_detail,
+        "error_kind": run.llm_error["error_kind"] if run.llm_error else None,
+        "llm_error": {k: v for k, v in run.llm_error.items() if k != "detail"} if run.llm_error else None,
         "llm_calls": run.llm_calls, "tool_calls": run.tool_calls,
         "input_tokens": run.input_tokens, "output_tokens": run.output_tokens,
         "cost_usd": round(run.cost, 6),

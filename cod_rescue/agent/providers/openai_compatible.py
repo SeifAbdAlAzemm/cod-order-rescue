@@ -9,6 +9,7 @@ import time
 
 from cod_rescue.agent.providers.base import (
     AssistantTurn, LLMError, LLMResponse, ToolCall, ToolResultsTurn, UserTurn, attempt_timeout,
+    classify_status_error, llm_error_from_status,
 )
 
 
@@ -97,20 +98,13 @@ class OpenAICompatibleLLM:
             )
         except o.APITimeoutError as e:
             raise LLMError("TIMEOUT", str(e)) from e
-        except (o.AuthenticationError, o.PermissionDeniedError) as e:
-            raise LLMError("AUTH", f"authentication/permission failed (check {self.profile.api_key_env})") from e
-        except o.NotFoundError as e:
-            kind = "UNSUPPORTED_CAPABILITY" if _is_tool_capability_error(e) else "NOT_FOUND"
-            raise LLMError(kind, f"{self.model}: {str(e)[:200]}") from e
-        except o.RateLimitError as e:
-            raise LLMError("RATE_LIMIT", str(e)) from e
-        except o.BadRequestError as e:
-            kind = "UNSUPPORTED_CAPABILITY" if _is_tool_capability_error(e) else "BAD_REQUEST"
-            raise LLMError(kind, str(e)[:300]) from e
-        except o.InternalServerError as e:
-            raise LLMError("SERVER", str(e)) from e
-        except o.APIStatusError as e:
-            raise LLMError("API_STATUS", str(e)) from e
+        except o.APIStatusError as e:  # every HTTP status error: neutral kind + structured, sanitized fields
+            kind = classify_status_error(o, e)
+            if kind in ("NOT_FOUND", "BAD_REQUEST") and _is_tool_capability_error(e):
+                kind = "UNSUPPORTED_CAPABILITY"
+            note = {"AUTH": f"authentication/permission failed (check {self.profile.api_key_env})",
+                    "NOT_FOUND": f"model or endpoint not found ({self.model})"}.get(kind, "")
+            raise llm_error_from_status(e, kind, note) from e
         except o.APIConnectionError as e:
             raise LLMError("CONNECTION", str(e)) from e
         latency = int((time.monotonic() - started) * 1000)

@@ -6,6 +6,7 @@ import time
 
 from cod_rescue.agent.providers.base import (
     AssistantTurn, LLMError, LLMResponse, ToolCall, ToolResultsTurn, UserTurn, attempt_timeout,
+    classify_status_error, llm_error_from_status,
 )
 
 ACCEPTED_STOP_REASONS = {"end_turn", "tool_use", "stop_sequence"}
@@ -77,18 +78,11 @@ class AnthropicLLM:
         # most specific first; APITimeoutError subclasses APIConnectionError
         except a.APITimeoutError as e:
             raise LLMError("TIMEOUT", str(e)) from e
-        except a.AuthenticationError as e:
-            raise LLMError("AUTH", f"authentication failed (check {self.profile.api_key_env})") from e
-        except a.NotFoundError as e:
-            raise LLMError("NOT_FOUND", f"model or endpoint not found ({self.model})") from e
-        except a.RateLimitError as e:
-            raise LLMError("RATE_LIMIT", str(e)) from e
-        except a.BadRequestError as e:
-            raise LLMError("BAD_REQUEST", str(e)) from e
-        except a.InternalServerError as e:
-            raise LLMError("SERVER", str(e)) from e
-        except a.APIStatusError as e:
-            raise LLMError("API_STATUS", str(e)) from e
+        except a.APIStatusError as e:  # every HTTP status error: neutral kind + structured, sanitized fields
+            kind = classify_status_error(a, e)
+            note = {"AUTH": f"authentication/permission failed (check {self.profile.api_key_env})",
+                    "NOT_FOUND": f"model or endpoint not found ({self.model})"}.get(kind, "")
+            raise llm_error_from_status(e, kind, note) from e
         except a.APIConnectionError as e:
             raise LLMError("CONNECTION", str(e)) from e
         latency = int((time.monotonic() - started) * 1000)

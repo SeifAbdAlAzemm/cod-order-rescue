@@ -320,3 +320,93 @@ def test_results_are_separated_by_mode_provider_and_model(settings, or_settings)
     assert results_dir(settings, "REPLAY").parts[-1] == "replay"
     assert results_dir(settings, "LIVE").parts[-3:] == ("live", "anthropic", "claude-haiku-5-5")
     assert results_dir(or_settings, "LIVE").parts[-3:] == ("live", "openai_compatible", "google_gemma-4-31b-it_free")
+
+
+# ---------------------------------------------------------------- structured, sanitized error diagnostics
+
+from cod_rescue.agent.providers.base import sanitize  # noqa: E402
+
+FAKE_KEY = "sk-or-v1-0123456789abcdefFAKEFAKE"
+S01_BODY = {"error": {"message": "Provider returned error", "code": 429, "metadata": {
+    "raw": f"google/gemma-4-31b-it:free is temporarily rate-limited upstream. debug key={FAKE_KEY}",
+    "provider_name": "Google AI Studio"}}}
+
+
+def test_openrouter_429_from_s01_yields_structured_sanitized_fields(or_settings):
+    exc = openai.RateLimitError("Error code: 429", body=S01_BODY,
+                                response=httpx2.Response(429, request=_REQ, headers={"retry-after": "7"}))
+    llm, _ = oa_llm(or_settings, exc=exc)
+    with pytest.raises(LLMError) as e:
+        llm.create("S", TOOL_SPECS, [UserTurn("x")])
+    d = e.value.diagnostics()
+    assert (d["error_kind"], d["http_status"], d["provider_error_code"], d["upstream_provider"], d["retry_after"]) == (
+        "RATE_LIMIT", 429, 429, "Google AI Studio", "7")
+    assert "rate-limited upstream" in d["detail"] and FAKE_KEY not in json.dumps(d)
+
+
+def test_anthropic_status_error_fields(settings):
+    from tests.test_slice3_runtime import _FakeClient, _FakeMessages
+    body = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    exc = anthropic_sdk().InternalServerError("Overloaded", body=body,
+                                              response=httpx2.Response(529, request=_REQ))
+    llm = AnthropicLLM(settings, client=_FakeClient(_FakeMessages(exc=exc)))
+    with pytest.raises(LLMError) as e:
+        llm.create("S", [], [])
+    d = e.value.diagnostics()
+    assert (d["error_kind"], d["http_status"], d["provider_error_code"], d["upstream_provider"]) == (
+        "SERVER", 529, "overloaded_error", None)
+
+
+def anthropic_sdk():
+    import anthropic
+    return anthropic
+
+
+def test_auth_error_names_the_env_var_never_the_key(or_settings, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_KEY)
+    exc = openai.AuthenticationError("bad key", body={"error": {"message": f"Invalid key {FAKE_KEY}", "code": 401}},
+                                     response=httpx2.Response(401, request=_REQ))
+    llm, _ = oa_llm(or_settings, exc=exc)
+    with pytest.raises(LLMError) as e:
+        llm.create("S", TOOL_SPECS, [UserTurn("x")])
+    assert e.value.kind == "AUTH" and "OPENROUTER_API_KEY" in e.value.detail and FAKE_KEY not in e.value.detail
+
+
+@pytest.mark.parametrize("raw", [
+    "Authorization: Bearer abc.def.ghi", "sk-ant-api03-AAAAAAAAAAAAAAAA", f"key {FAKE_KEY}",
+    "hf_AbCdEfGhIjKlMnOpQrStUv", 'api_key="supersecretvalue1"', "x-api-key: zzzzzzzzzzzzzzzz",
+])
+def test_sanitize_masks_credentials(raw):
+    out = sanitize(raw)
+    assert "[REDACTED]" in out
+    for secret in ("abc.def.ghi", "AAAAAAAAAAAAAAAA", "0123456789abcdefFAKEFAKE", "AbCdEfGhIjKlMnOpQrStUv",
+                   "supersecretvalue1", "zzzzzzzzzzzzzzzz"):
+        assert secret not in out
+    assert len(sanitize("x" * 5000)) == 1000
+
+
+def test_runtime_records_structured_llm_error_and_still_fails_closed(seeded, settings):
+    from cod_rescue.agent.providers.replay import ReplayLLM
+    ctx = ToolContext(seeded, settings, clock=lambda: FIXED_NOW)
+    script = [{"error": "RATE_LIMIT", "http_status": 429, "provider_error_code": 429,
+               "upstream_provider": "Google AI Studio", "retry_after": "7",
+               "message": f"temporarily rate-limited upstream {FAKE_KEY}"}]
+    r = handle_event(ctx, ReplayLLM(script), "ORD-1001", "EVT-DIAG", "تمام")
+    assert (r["error_class"], r["error_kind"], r["outcome"]) == ("LLM_ERROR", "RATE_LIMIT", "ESCALATE_TO_HUMAN")
+    assert r["llm_error"] == {"error_kind": "RATE_LIMIT", "http_status": 429, "provider_error_code": 429,
+                              "upstream_provider": "Google AI Studio", "retry_after": "7"}
+    assert seeded.execute("SELECT lifecycle_state FROM orders WHERE order_id='ORD-1001'").fetchone()[0] == "PENDING"
+    stored = " ".join(str(tuple(x)) for x in seeded.execute("SELECT * FROM agent_steps")) + str(
+        tuple(seeded.execute("SELECT * FROM agent_runs").fetchone()))
+    assert "Google AI Studio" in stored and "429" in stored and FAKE_KEY not in stored and FAKE_KEY not in json.dumps(r)
+
+
+def test_backup_profile_is_separate_and_defaults_unchanged(settings):
+    nemo = settings.llm.profiles["openrouter-nemotron-free"]
+    gemma = settings.llm.profiles["openrouter-gemma-free"]
+    assert settings.llm.active_profile == "anthropic-haiku"
+    assert (nemo.provider, nemo.model, nemo.pricing.status) == (
+        "openai_compatible", "nvidia/nemotron-3-super-120b-a12b:free", "verified_free")
+    assert gemma.model == "google/gemma-4-31b-it:free" and gemma.pricing.status == "verified_free"
+    assert results_dir(load_settings(env={"COD_RESCUE_LLM_PROFILE": "openrouter-nemotron-free"}), "LIVE").parts[-2:] == (
+        "openai_compatible", "nvidia_nemotron-3-super-120b-a12b_free")
