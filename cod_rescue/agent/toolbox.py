@@ -14,6 +14,7 @@ from cod_rescue.errors import CommitTimeout, ExternalSourceError
 from cod_rescue.policy import evaluate
 from cod_rescue.services import list_alternatives, load_order
 from cod_rescue import tools as guarded
+from cod_rescue.agent.templates import escalation_notice, ready_notice
 
 _EMPTY = {"type": "object", "properties": {}, "additionalProperties": False}
 _TEXT = {"type": "string", "maxLength": 120}
@@ -178,6 +179,16 @@ class Dispatcher:
     def _wrap(self, result: dict) -> ToolOutcome:
         return ToolOutcome(result, not result.get("ok", False))
 
+    def notify(self, kind: str, text: str, key: str) -> None:
+        """Send a trusted template message (idempotent by key)."""
+        res = guarded.send_message(self.ctx, self.order_id, kind, text, key)
+        if res["status"] == "QUEUED_SIMULATED":
+            self.messages_sent.append({"kind": kind, "text": text, "template": True})
+
+    def _escalation_notice(self) -> None:
+        self.escalated = True
+        self.notify("ESCALATION_NOTICE", escalation_notice(self.order_id), f"esc-notice:{self.event_id}")
+
     def _t_get_order_status(self, _):
         o = load_order(self.ctx.conn, self.order_id)
         self.seen_version = o.version
@@ -203,7 +214,7 @@ class Dispatcher:
         source = self.event_id if inp["source"] == "customer_message" else None
         res = guarded.apply_customer_change(self.ctx, self.order_id, self.seen_version, inp["changes"], source)
         if res.get("blocked"):  # READY+/locked order: the tool escalated instead of applying
-            self.escalated = True
+            self._escalation_notice()
         return self._wrap(res)
 
     def _t_request_confirmation(self, _):
@@ -217,16 +228,21 @@ class Dispatcher:
 
     def _t_commit_ready(self, _):
         try:
-            return self._wrap(guarded.commit_ready(self.ctx, self.order_id, self.seen_version))
+            res = guarded.commit_ready(self.ctx, self.order_id, self.seen_version)
         except CommitTimeout as t:  # never blind-retry: resolve via ledger (AC-07)
             res = guarded.resolve_commit_outcome(self.ctx, self.order_id, t.op_id)
             if res["status"] == "COMMITTED":
-                return self._wrap({**res["result"], "recovered_after_timeout": True})
-            if res["status"] == "NOT_COMMITTED":
+                res = {**res["result"], "recovered_after_timeout": True}
+            elif res["status"] == "NOT_COMMITTED":
                 return self._wrap({"ok": False, "status": "COMMIT_NOT_APPLIED", "safe_to_retry": True})
-            self.escalated = True
-            return ToolOutcome({"ok": False, "status": "COMMIT_OUTCOME_UNKNOWN_ESCALATED"}, True,
-                               stop="TIMEOUT", escalated=True)
+            else:
+                self._escalation_notice()
+                return ToolOutcome({"ok": False, "status": "COMMIT_OUTCOME_UNKNOWN_ESCALATED"}, True,
+                                   stop="TIMEOUT", escalated=True)
+        if res.get("ok") and res.get("op_id"):  # COMMITTED or ALREADY_COMMITTED
+            self.notify("INFO", ready_notice(self.order_id), f"ready-notice:{res['op_id']}")
+            res = {**res, "customer_notified": "system ready notice sent"}
+        return self._wrap(res)
 
     def _t_flag_duplicates(self, _):
         return self._wrap(guarded.flag_duplicates(self.ctx, self.order_id))
@@ -244,7 +260,8 @@ class Dispatcher:
     def _t_escalate_to_human(self, inp):
         res = guarded.escalate(self.ctx, self.order_id, inp["reason"], inp["note"])
         if res["ok"]:
-            self.escalated = True
+            self._escalation_notice()
+            res = {**res, "customer_notified": "system escalation notice sent"}
         return ToolOutcome(res, not res["ok"], escalated=res["ok"])
 
 

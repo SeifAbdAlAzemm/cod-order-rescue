@@ -37,6 +37,12 @@ def _print_eval(report: dict, verbose: bool) -> None:
                 print(f"        = outcome {r.get('outcome')} | lifecycle {r.get('lifecycle_state')} | "
                       f"error {r.get('error_class')} | llm_calls {r.get('llm_calls')} tool_calls {r.get('tool_calls')}"
                       + ("  (saved result replayed)" if r.get("replayed_from_saved_result") else ""))
+                if report["mode"] == "LIVE" and not r.get("replayed_from_saved_result"):
+                    print(f"        = tokens {r.get('input_tokens')} in / {r.get('output_tokens')} out | "
+                          f"latency {r.get('latency_ms')} ms | est. cost ${r.get('cost_usd', 0):.5f} ({r.get('cost_basis')})"
+                          + (" | FALLBACK reply used" if r.get("fallback_reply_used") else ""))
+                if r.get("agent_summary"):
+                    print(f"        model summary: {r['agent_summary'][:160]}")
     t = report["totals"]
     print(f"\n{report['mode']}: {report['passed']}/{report['total']} scenarios passed"
           + (f" | skipped (not live-capable): {', '.join(report['skipped_not_live_capable'])}"

@@ -40,7 +40,7 @@ Test case definitions are those of `TEST-SCENARIOS.md`, unchanged and never renu
 | TC-15 | Same event delivered twice | ORD-1001 / ORD-1007 | DT-14 | PASS (tool level) `test_TC15_DT14_*` | PASS S14 | NOT RUN |
 | TC-16 | Commit timeout after possible success | ORD-1015 | AC-07 | PASS `test_TC16_AC07_*`, `test_AC07_*` (3 tests) | PASS S15 | NOT RUN |
 
-Last runs (Slice 3): `python -m pytest` → 230 passed (deterministic + replay); `python -m cod_rescue eval` → REPLAY 23/23 scenarios passed. LIVE: not run (no API call has been made).
+Last runs (Slice 3 + robustness fixes): `python -m pytest` → 259 passed (deterministic + replay); `python -m cod_rescue eval` → REPLAY 25/25 scenarios passed. LIVE: not run (no API credentials; no API call has been made).
 
 ## Robustness scenarios (Replay; not tied to a TC)
 | Scenario | Condition | Replay | Live |
@@ -51,6 +51,8 @@ Last runs (Slice 3): `python -m pytest` → 230 passed (deterministic + replay);
 | S21 | Malformed and unsupported tool calls | PASS | not live-capable |
 | S22 | Runaway loop (LLM-call limit) | PASS | not live-capable |
 | S23 | Token budget exceeded; over-budget actions not executed | PASS | not live-capable |
+| S24 | Model ends without replying → deterministic fallback reply (idempotent) | PASS | not live-capable |
+| S25 | Customer asks for a delivery date → no promise sent | PASS | NOT RUN |
 
 ## Coverage limitations
 - Deterministic and Replay results prove the guards, policy and harness, not the LLM's interpretation of real Egyptian Arabic; only Live runs measure that.

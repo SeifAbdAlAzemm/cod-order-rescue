@@ -286,6 +286,33 @@ def is_unambiguous_affirmative(settings: Settings, text: str | None) -> bool:
     return bool(words) and all(w in allowed for w in words) and any(w in core for w in words)
 
 
+# Free-text outbound policy (SA-21): the agent may not make operational commitments it cannot verify.
+_DAYS = r"(السبت|الاحد|الاتنين|التلات|التلاتاء|الاربع|الاربعاء|الخميس|الجمعه|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_COMMITMENT_PATTERNS = {
+    "DELIVERY_PROMISE": [
+        r"(هيوصل|هتوصل|هيوصلك|هتستلم|هتستلمه|هيتسلم|هيجيلك|التوصيل|الاستلام|هيكون عندك|deliver\w*|arriv\w*)"
+        r"\W+(\w+\W+){0,4}(بكره|بكرا|النهارده|انهارده|بعد بكره|خلال|يوم|ايام|ساعه|ساعات|الاسبوع|" + _DAYS[1:-1]
+        + r"|today|tomorrow|within|\d)",
+        r"(خلال|في خلال|within)\s+\d+\s*(يوم|ايام|ساعه|ساعات|days?|hours?)",
+    ],
+    "REFUND_OR_COMPENSATION": [r"(استرداد|استرجاع فلوس|فلوسك هترجع|تعويض|refund|compensat\w*)"],
+    "FREE_OR_GUARANTEE": [r"(مجان\w*|ببلاش|شحن مجاني|free|مضمون|اضمنلك|ضمان|guarantee\w*|بوعدك|اوعدك|promise)"],
+    "CANCELLATION_CLAIM": [r"(اتلغي|تم الغاء|تم إلغاء|لغينا|الغينا|cancell?ed)"],
+}
+_STATE_CLAIMS = {  # allowed only when the authoritative lifecycle supports them
+    "CONFIRMATION_CLAIM": (r"(\bاتاكد\b|تم تاكيد|اتاكد طلبك|طلبك اتاكد|confirmed)", {"READY_FOR_DISPATCH", "SHIPPED", "DELIVERED"}),
+    "SHIPPING_CLAIM": (r"(اتشحن|تم الشحن|في الطريق|shipped|on the way)", {"SHIPPED", "DELIVERED"}),
+}
+
+
+def outbound_violations(text: str, lifecycle_state: str) -> list[str]:
+    t = normalize_text(text)
+    found = [code for code, pats in _COMMITMENT_PATTERNS.items() if any(re.search(p, t) for p in pats)]
+    found += [code for code, (pat, ok_states) in _STATE_CLAIMS.items()
+              if re.search(pat, t) and lifecycle_state not in ok_states]
+    return found
+
+
 def is_explicit_both_intended(settings: Settings, text: str | None) -> bool:
     """Strict lexical gate for DT-08: explicit 'yes, both orders'. Questions, negations,
     conditions or any unlisted word fail (e.g. 'لا واحد بس', 'الاتنين؟', 'اه بس الغي واحد')."""

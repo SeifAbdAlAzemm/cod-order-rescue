@@ -13,12 +13,14 @@ import uuid
 
 from cod_rescue.agent.llm import LLMError
 from cod_rescue.agent.prompts import SYSTEM_PROMPT, build_turn
+from cod_rescue.agent.templates import fallback_message
 from cod_rescue.agent.toolbox import TOOL_SPECS, Dispatcher, tool_result_block
 from cod_rescue.config import model_pricing
 from cod_rescue.context import ToolContext, redact
-from cod_rescue.policy import READY
+from cod_rescue.policy import READY, evaluate
 from cod_rescue.services import load_order
-from cod_rescue.tools import escalate, ingest_event, record_decision, save_event_result
+from cod_rescue.tools import (escalate, ingest_event, record_decision, request_confirmation, save_event_result,
+                              send_message)
 
 
 class _Stop(Exception):
@@ -91,8 +93,11 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
             if run.llm_calls >= budget.max_llm_calls:
                 raise _Stop("BUDGET_EXCEEDED", f"max_llm_calls={budget.max_llm_calls} reached")
             run.check_budget()
+            remaining = budget.max_wall_time_s - run.elapsed_s()
+            if remaining < 1.0:
+                raise _Stop("TIMEOUT", "less than 1s of wall-time budget left for a model call")
             try:
-                resp = llm.create(SYSTEM_PROMPT, TOOL_SPECS, messages)
+                resp = llm.create(SYSTEM_PROMPT, TOOL_SPECS, messages, remaining_s=remaining)
             except LLMError as e:
                 run.trace("LLM_CALL", llm.model, None, {"error": e.kind, "message": str(e)[:300]})
                 raise _Stop("TIMEOUT" if e.kind == "TIMEOUT" else "LLM_ERROR", f"{e.kind}: {str(e)[:200]}")
@@ -142,6 +147,7 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
             escalate(ctx, order_id, f"AGENT_{error_class}", error_detail or error_class)
     elif not dispatcher.escalated:
         record_decision(ctx, order_id)  # persists ON_HOLD/ESCALATE from deterministic policy; never READY
+    fallback_used = _ensure_reply(ctx, order_id, event_id, dispatcher)
     o = load_order(ctx.conn, order_id)
     reasons = (o.outcome_reason or "").split(",") if o.outcome_reason else []
     run.trace("STOP", error_class or "COMPLETED", None, {"outcome": o.agent_outcome, "detail": error_detail})
@@ -157,6 +163,7 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
         "cost_usd": round(run.cost, 6),
         "cost_basis": "ESTIMATED_FROM_TOKEN_USAGE" if run.live else "NOT_APPLICABLE_REPLAY",
         "latency_ms": latency_ms, "messages_sent": dispatcher.messages_sent, "agent_summary": final_text[:500],
+        "fallback_reply_used": fallback_used,
     }
     ctx.conn.execute(
         "UPDATE agent_runs SET status = ?, error_class = ?, error_detail = ?, llm_calls = ?, tool_calls = ?, "
@@ -167,3 +174,23 @@ def handle_event(ctx: ToolContext, llm, order_id: str, event_id: str, text: str)
     save_event_result(ctx, event_id, result)
     ctx.run_id = None
     return result
+
+
+def _ensure_reply(ctx: ToolContext, order_id: str, event_id: str, dispatcher: Dispatcher) -> bool:
+    """Every processed customer message gets a reply. If the agent sent none, send a deterministic,
+    idempotent template chosen from authoritative state (never LLM text)."""
+    if dispatcher.messages_sent:
+        return False
+    o = load_order(ctx.conn, order_id)
+    decision = evaluate(ctx, order_id).to_dict()
+    if o.agent_outcome != "ESCALATE_TO_HUMAN" and decision["next_action"] == "REQUEST_CONFIRMATION":
+        res = request_confirmation(ctx, order_id, o.version)  # itself a trusted template
+        if res["status"] == "REQUESTED":
+            dispatcher.messages_sent.append({"kind": "CONFIRMATION_REQUEST", "text": res["message"], "template": True,
+                                             "fallback": True})
+            return True
+    kind, text = fallback_message(order_id, o.agent_outcome, decision)
+    res = send_message(ctx, order_id, kind, text, f"fallback:{event_id}")
+    if res["ok"]:
+        dispatcher.messages_sent.append({"kind": kind, "text": text, "template": True, "fallback": True})
+    return True

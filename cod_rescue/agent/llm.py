@@ -69,11 +69,19 @@ class AnthropicLLM:
         self.client = client or anthropic.Anthropic(
             timeout=settings.llm.request_timeout_s, max_retries=settings.llm.max_retries)
 
-    def create(self, system: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+    def attempt_timeout(self, remaining_s: float | None) -> float:
+        """Per-attempt timeout so that ALL SDK attempts (1 + max_retries) fit in the remaining wall budget."""
+        cfg = self.settings.llm
+        if remaining_s is None:
+            return cfg.request_timeout_s
+        return max(1.0, min(cfg.request_timeout_s, remaining_s / (cfg.max_retries + 1)))
+
+    def create(self, system: str, tools: list[dict], messages: list[dict],
+               remaining_s: float | None = None) -> LLMResponse:
         a = self._anthropic
         started = time.monotonic()
         try:
-            resp = self.client.messages.create(
+            resp = self.client.with_options(timeout=self.attempt_timeout(remaining_s)).messages.create(
                 model=self.model,
                 max_tokens=self.settings.llm.max_tokens,
                 system=system,
@@ -130,7 +138,8 @@ class ReplayLLM:
         self.script = list(script)
         self.calls = 0
 
-    def create(self, system: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+    def create(self, system: str, tools: list[dict], messages: list[dict],
+               remaining_s: float | None = None) -> LLMResponse:
         if self.calls >= len(self.script):
             raise LLMError("SCRIPT_EXHAUSTED", "replay script has no more turns")
         step = self.script[self.calls]

@@ -105,7 +105,8 @@ class _FakeLive:
     def __init__(self, input_tokens=1000, output_tokens=100, sleep=0.0, calls=None):
         self.i, self.o, self.sleep, self.calls = input_tokens, output_tokens, sleep, calls or []
 
-    def create(self, system, tools, messages):
+    def create(self, system, tools, messages, remaining_s=None):
+        self.calls.append(remaining_s)
         time.sleep(self.sleep)
         call = ToolCall("t1", "get_order_status", {})
         return LLMResponse([{"type": "tool_use", "id": "t1", "name": "get_order_status", "input": {}}],
@@ -197,6 +198,15 @@ class _FakeMessages:
         return self.response
 
 
+class _FakeClient:
+    def __init__(self, messages):
+        self.messages, self.timeouts = messages, []
+
+    def with_options(self, timeout=None, **_):
+        self.timeouts.append(timeout)
+        return self
+
+
 def _resp(stop="tool_use"):
     return SimpleNamespace(
         stop_reason=stop,
@@ -208,7 +218,7 @@ def _resp(stop="tool_use"):
 
 def test_anthropic_adapter_parses_response_and_sends_config(settings):
     msgs = _FakeMessages(_resp())
-    llm = AnthropicLLM(settings, client=SimpleNamespace(messages=msgs))
+    llm = AnthropicLLM(settings, client=_FakeClient(msgs))
     r = llm.create("sys", TOOL_SPECS, [{"role": "user", "content": "hi"}])
     assert [c.name for c in r.tool_calls] == ["get_order_status"] and r.text == "checking"
     assert (r.input_tokens, r.output_tokens, len(r.assistant_content)) == (1200, 80, 3)  # thinking block kept
@@ -218,7 +228,7 @@ def test_anthropic_adapter_parses_response_and_sends_config(settings):
 
 @pytest.mark.parametrize("stop, kind", [("refusal", "REFUSAL"), ("max_tokens", "MAX_TOKENS"), ("pause_turn", "UNEXPECTED_STOP")])
 def test_anthropic_adapter_rejects_unusable_stops(settings, stop, kind):
-    llm = AnthropicLLM(settings, client=SimpleNamespace(messages=_FakeMessages(_resp(stop))))
+    llm = AnthropicLLM(settings, client=_FakeClient(_FakeMessages(_resp(stop))))
     with pytest.raises(LLMError) as e:
         llm.create("sys", [], [])
     assert e.value.kind == kind
@@ -236,7 +246,7 @@ _REQ = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     (anthropic.InternalServerError("se", response=httpx2.Response(529, request=_REQ), body=None), "SERVER"),
 ])
 def test_anthropic_adapter_maps_sdk_errors(settings, exc, kind):
-    llm = AnthropicLLM(settings, client=SimpleNamespace(messages=_FakeMessages(exc=exc)))
+    llm = AnthropicLLM(settings, client=_FakeClient(_FakeMessages(exc=exc)))
     with pytest.raises(LLMError) as e:
         llm.create("sys", [], [])
     assert e.value.kind == kind
@@ -257,3 +267,98 @@ def test_live_cli_refuses_without_api_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(cli, "load_dotenv", lambda *a, **k: None)
     assert cli.main(["eval", "--mode", "live", "--scenario", "S01"]) == 2
+
+
+# ---------------------------------------------------------------- preflight: timeouts & retries
+
+def test_sdk_client_configured_with_bounded_retries_and_timeout(settings, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-key")  # construction only, no request
+    llm = AnthropicLLM(settings)
+    assert llm.client.max_retries == settings.llm.max_retries == 2
+    assert llm.client.timeout == settings.llm.request_timeout_s
+
+
+@pytest.mark.parametrize("remaining, expected", [(None, 30.0), (60.0, 20.0), (9.0, 3.0), (0.5, 1.0), (500.0, 30.0)])
+def test_per_attempt_timeout_fits_all_retries_in_remaining_budget(settings, remaining, expected):
+    llm = AnthropicLLM(settings, client=_FakeClient(_FakeMessages(_resp())))
+    assert llm.attempt_timeout(remaining) == expected
+
+
+def test_runtime_passes_remaining_wall_budget_to_each_call(ctx):
+    ctx.settings = _budget(ctx.settings, max_llm_calls=2)
+    fake = _FakeLive()
+    handle_event(ctx, fake, "ORD-1001", "EVT-REM", "الطلب فين")
+    assert len(fake.calls) == 2 and all(0 < r <= 60 for r in fake.calls) and fake.calls[1] <= fake.calls[0]
+
+
+def test_adapter_applies_per_call_timeout(settings):
+    client = _FakeClient(_FakeMessages(_resp()))
+    AnthropicLLM(settings, client=client).create("s", [], [], remaining_s=12.0)
+    assert client.timeouts == [4.0]
+
+
+# ---------------------------------------------------------------- fallback reply & trusted templates
+
+def test_fallback_reply_when_agent_sends_nothing_is_template_and_idempotent(ctx):
+    r = handle_event(ctx, ReplayLLM([{"text": "nothing"}]), "ORD-1002", "EVT-FB", "فين الأوردر")
+    assert r["fallback_reply_used"] and r["messages_sent"][0]["template"]
+    assert r["messages_sent"][0]["kind"] == "CLARIFICATION" and "مقاس L أو M" in r["messages_sent"][0]["text"]
+    again = handle_event(ctx, ReplayLLM([]), "ORD-1002", "EVT-FB", "فين الأوردر")
+    assert again["replayed_from_saved_result"]
+    assert count(ctx.conn, "messages", "order_id='ORD-1002' AND direction='OUTBOUND'") == 1
+
+
+def test_no_fallback_when_agent_replied(ctx):
+    llm = ReplayLLM([{"tool_calls": [{"name": "send_customer_message",
+                                      "input": {"kind": "CLARIFICATION", "text": "تحب مقاس L ولا M؟"}}]}, {"text": "ok"}])
+    r = handle_event(ctx, llm, "ORD-1002", "EVT-NOFB", "فين الأوردر")
+    assert not r["fallback_reply_used"] and count(ctx.conn, "messages", "order_id='ORD-1002' AND direction='OUTBOUND'") == 1
+
+
+def test_error_path_sends_escalation_notice(ctx):
+    r = handle_event(ctx, ReplayLLM([{"error": "SERVER"}]), "ORD-1001", "EVT-ERRN", "تمام")
+    assert r["fallback_reply_used"] and r["messages_sent"][0]["kind"] == "ESCALATION_NOTICE"
+
+
+def test_commit_sends_trusted_ready_notice_once(ctx):
+    llm = ReplayLLM([{"tool_calls": [{"name": "record_confirmation", "input": {}}]},
+                     {"tool_calls": [{"name": "commit_ready", "input": {}}]},
+                     {"tool_calls": [{"name": "commit_ready", "input": {}}]}, {"text": "done"}])
+    r = handle_event(ctx, llm, "ORD-1007", "EVT-RN", "تمام")
+    assert r["outcome"] == "READY_FOR_DISPATCH" and not r["fallback_reply_used"]
+    assert count(ctx.conn, "messages", "order_id='ORD-1007' AND idempotency_key LIKE 'ready-notice:%'") == 1
+
+
+@pytest.mark.parametrize("text, state", [
+    ("طلبك هيوصل بكرة إن شاء الله", "VERIFIED"), ("هتستلمه خلال 3 أيام", "PENDING"), ("التوصيل يوم الخميس", "PENDING"),
+    ("هنرجعلك فلوسك ونعملك تعويض", "PENDING"), ("الشحن مجاني ليك", "PENDING"), ("أوعدك يوصل سليم", "PENDING"),
+    ("تم تأكيد طلبك", "VERIFIED"), ("الطلب اتشحن", "READY_FOR_DISPATCH"), ("تم إلغاء الطلب التاني", "PENDING"),
+])
+def test_operational_commitments_rejected(ctx, text, state):
+    oid = {"VERIFIED": "ORD-1007", "PENDING": "ORD-1001", "READY_FOR_DISPATCH": "ORD-1011"}[state]
+    res = guarded.send_message(ctx, oid, "INFO", text, f"k-{hash(text)}")
+    assert res["status"] == "OPERATIONAL_COMMITMENT_NOT_ALLOWED"
+    assert count(ctx.conn, "messages", "idempotency_key=?", (f"k-{hash(text)}",)) == 0
+
+
+@pytest.mark.parametrize("text, oid", [
+    ("للأسف مقاس XL خلص حاليًا. متاح مقاس L أو M، تحب أنهي مقاس؟", "ORD-1002"),
+    ("عشان نقدر نوصلك، محتاجين اسم الشارع ورقم العمارة لو سمحت.", "ORD-1004"),
+    ("بنراجع مصاريف الشحن حاليًا وهنرجعلك في أقرب وقت.", "ORD-1001"),
+    ("تم تأكيد طلبك", "ORD-1011"),          # true: order is READY_FOR_DISPATCH
+    ("الطلب اتشحن بالفعل", "ORD-1012"),     # true: order is SHIPPED
+])
+def test_legitimate_messages_still_allowed(ctx, text, oid):
+    assert guarded.send_message(ctx, oid, "INFO", text, f"ok-{oid}")["ok"]
+
+
+def test_all_templates_pass_the_outbound_guards(ctx):
+    from cod_rescue.agent import templates as T
+    samples = [("INFO", T.ready_notice("ORD-1011"), "ORD-1011"), ("ESCALATION_NOTICE", T.escalation_notice("ORD-1001"), "ORD-1001")]
+    for decision in ({"next_action": "AWAIT_CONFIRMATION"}, {"next_action": "ASK_CLARIFICATION", "details": {"missing_fields": ["street", "building"]}},
+                     {"next_action": "OFFER_ALTERNATIVES", "details": {"alternatives": {"X": [{"size": "L"}, {"size": "M"}]}}},
+                     {"next_action": "HOLD_FOR_SOURCE"}):
+        kind, text = T.fallback_message("ORD-1001", "ON_HOLD", decision)
+        samples.append((kind, text, "ORD-1001"))
+    for i, (kind, text, oid) in enumerate(samples):
+        assert guarded.send_message(ctx, oid, kind, text, f"tpl-{i}")["ok"], text

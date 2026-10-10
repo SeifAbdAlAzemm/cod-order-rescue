@@ -20,8 +20,8 @@ from cod_rescue.normalize import is_grounded, normalize_phone
 from cod_rescue.policy import ESCALATE, ON_HOLD, READY, Decision, evaluate
 from cod_rescue.services import (
     ADDRESS_FIELDS, EDITABLE_STATES, LOCKED_STATES, compute_quote, find_duplicate_candidates,
-    is_explicit_both_intended, is_unambiguous_affirmative, load_order, render_summary, resolve_governorate,
-    summary_hash,
+    is_explicit_both_intended, is_unambiguous_affirmative, load_order, outbound_violations, render_summary,
+    resolve_governorate, summary_hash,
 )
 
 ALLOWED_TRANSITIONS = {
@@ -188,6 +188,12 @@ def send_message(ctx: ToolContext, order_id: str, kind: str, body: str, idempote
                 return _ok("DUPLICATE_MESSAGE", seq=existing["seq"])
             if kind == "CLARIFICATION" and o.lifecycle_state not in EDITABLE_STATES:
                 return _refused("NOT_EDITABLE", lifecycle_state=o.lifecycle_state)
+            violations = outbound_violations(body, o.lifecycle_state)
+            if violations:
+                ctx.audit("POLICY", "MESSAGE_REJECTED", order_id, {"violations": violations, "body": body})
+                return _refused("OPERATIONAL_COMMITMENT_NOT_ALLOWED", violations=violations,
+                                hint="do not promise delivery dates, refunds, free items, guarantees, or "
+                                     "states the order is not in; say a team member will follow up")
             cur = ctx.conn.execute(
                 "INSERT INTO messages (order_id, direction, kind, body, idempotency_key, created_at) "
                 "VALUES (?, 'OUTBOUND', ?, ?, ?, ?)",

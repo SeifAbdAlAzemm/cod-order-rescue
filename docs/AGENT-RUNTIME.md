@@ -32,8 +32,11 @@ The model never supplies order IDs, versions or event IDs for its own order; the
 | Tokens | 40k in / 12k out | BUDGET_EXCEEDED |
 | Estimated cost | $0.05 | BUDGET_EXCEEDED |
 | API error after SDK retries (2), refusal, truncation | — | LLM_ERROR / TIMEOUT |
+| Per-attempt HTTP timeout | min(30 s, remaining wall budget ÷ 3) so 1 call + 2 SDK retries always fit in the remaining budget | TIMEOUT |
 | Unexpected tool/infra exception | — | TOOL_ERROR |
 | Commit outcome unknown after timeout | — | TIMEOUT (escalated) |
+
+Customer-facing safety: agent free text cannot contain amounts or unverifiable commitments (delivery dates, refunds, free items, guarantees, false confirmed/shipped/cancelled claims). Critical messages are system templates (summary, duplicate question, READY notice, escalation notice). If the agent ends without replying, a deterministic idempotent fallback reply is sent.
 
 Business-rule refusals (e.g. AMBIGUOUS_REPLY) are normal tool results the model sees, not run errors. On any error the order is escalated to staff and never made READY by an error path; an order committed earlier in the run stays READY.
 
