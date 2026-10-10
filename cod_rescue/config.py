@@ -101,6 +101,7 @@ class InventoryRules:
 class ConfirmationRules:
     status: str
     short_affirmatives: list[str]
+    filler_words: list[str]
     require_first_reply_after_request: bool
 
 
@@ -117,6 +118,7 @@ class FaultInjection:
     shipping_rates_unavailable: bool
     price_source_unavailable: bool
     commit_timeout_after_success: bool
+    ledger_unavailable: bool
 
 
 @dataclass(frozen=True)
@@ -226,6 +228,8 @@ def _validate(s: Settings) -> None:
         raise ConfigError("[simulation.duplicates] window_hours must be > 0")
     if s.simulation.duplicates.item_match != "exact_signature":
         raise ConfigError("[simulation.duplicates] item_match must be 'exact_signature'")
+    if not s.simulation.confirmation.require_first_reply_after_request:
+        raise ConfigError("[simulation.confirmation] require_first_reply_after_request must stay true (BR-04)")
     if s.simulation.clarification.max_attempts < 1:
         raise ConfigError("[simulation.clarification] max_attempts must be >= 1")
     if s.simulation.clarification.on_exceeded != "ESCALATE_TO_HUMAN":

@@ -68,10 +68,14 @@ reservation_point = "AT_READY_COMMIT"
 
 [simulation.confirmation]
 status = "SIMULATION_ASSUMPTION"
-# A short affirmative counts only if it is the first inbound message after the latest
-# OPEN confirmation request, that request is bound to the current order version,
-# and the reply contains no change request. Anything else -> ask again.
-short_affirmatives = ["تمام", "تمام كده", "ماشي", "موافق", "أيوه", "ايوه", "اه", "ok", "okay", "yes"]
+# A reply confirms only if ALL hold (deterministic, the LLM cannot override):
+#  - it is the only customer message after the latest OPEN confirmation request,
+#  - that request is bound to the current order version and current content hash,
+#  - after normalization, every word is in short_affirmatives or filler_words,
+#    at least one word is a short affirmative, and it is not a question.
+# Anything else (e.g. "تمام بس غير المقاس", "تمام؟") -> not a confirmation; ask again.
+short_affirmatives = ["تمام", "ماشي", "موافق", "موافقه", "أيوه", "ايوه", "اه", "اكيد", "أكد", "اكد", "ok", "okay", "yes", "confirm", "confirmed"]
+filler_words = ["كده", "كدا", "يا", "فندم", "باشا", "شكرا", "الطلب", "الاوردر", "خلاص", "جدا", "please", "thanks", "the", "order"]
 require_first_reply_after_request = true
 
 [simulation.messaging]
@@ -85,3 +89,4 @@ inventory_unavailable = false
 shipping_rates_unavailable = false
 price_source_unavailable = false
 commit_timeout_after_success = false
+ledger_unavailable = false

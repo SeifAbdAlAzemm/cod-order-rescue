@@ -14,10 +14,10 @@ import pytest
 from cod_rescue import PROJECT_ROOT
 from cod_rescue.config import DEFAULT_SETTINGS_PATH, SIMULATION_STATUS, ConfigError, load_settings
 from cod_rescue.db import SCHEMA_VERSION, connect, init_db, schema_version, table_names, transaction
-from cod_rescue.seed import seed
+from cod_rescue.seed import SeedError, seed
 
 EXPECTED_TABLES = {
-    "products", "variants", "inventory", "governorates", "governorate_aliases", "shipping_rates", "discounts",
+    "db_meta", "products", "variants", "inventory", "governorates", "governorate_aliases", "shipping_rates", "discounts",
     "orders", "order_items", "confirmation_requests", "messages", "event_results", "duplicate_flags",
     "operations", "stock_reservations", "escalations", "agent_runs", "audit_log",
 }
@@ -164,8 +164,28 @@ def test_seed_loads_expected_counts(seeded):
 def test_seed_is_deterministic_and_repeatable(seeded, settings):
     first = _db_fingerprint(seeded)
     seeded.execute("UPDATE inventory SET available = 99 WHERE sku = 'HOODIE-BLK-L'")
-    seed(seeded, settings.fixtures_dir)
+    seed(seeded, settings, replace_existing=True)
     assert _db_fingerprint(seeded) == first
+
+
+def test_seed_refuses_to_overwrite_without_explicit_reset(seeded, settings):
+    with pytest.raises(SeedError, match="--reset"):
+        seed(seeded, settings)
+    assert seeded.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 15
+
+
+def test_seed_refuses_non_synthetic_database_even_with_reset(tmp_path, settings):
+    foreign = connect(tmp_path / "foreign.sqlite3")
+    foreign.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)")
+    foreign.execute("INSERT INTO customers (name) VALUES ('real data')")
+    with pytest.raises(SeedError, match="not marked as the synthetic demo"):
+        seed(foreign, settings, replace_existing=True)
+    assert foreign.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 1
+    foreign.close()
+
+
+def test_seeded_db_is_marked_synthetic(seeded):
+    assert seeded.execute("SELECT value FROM db_meta WHERE key = 'purpose'").fetchone()[0] == "SYNTHETIC_DEMO"
 
 
 def test_seed_starts_with_no_runtime_side_effects(seeded):
@@ -237,9 +257,12 @@ def test_cli_seed_and_status(tmp_path):
     db = tmp_path / "cli.sqlite3"
     run = lambda *a: subprocess.run([sys.executable, "-m", "cod_rescue", "--db", str(db), *a],
                                     cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8")
-    seeded = run("seed", "--reset")
+    seeded = run("seed")
     assert seeded.returncode == 0, seeded.stderr
     assert "SYNTHETIC" in seeded.stdout
+    again = run("seed")
+    assert again.returncode == 2 and "--reset" in again.stderr
+    assert run("seed", "--reset").returncode == 0
     status = run("status")
     assert status.returncode == 0, status.stderr
     assert "ORD-1015" in status.stdout and "SIMULATED" in status.stdout

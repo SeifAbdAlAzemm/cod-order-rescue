@@ -1,6 +1,12 @@
--- COD Order Rescue - SQLite schema (schema version 1).
+-- COD Order Rescue - SQLite schema (schema version 2).
 -- Simulated order system for a synthetic shop. Not a real merchant integration.
 -- Money is stored as whole EGP integers (simulation assumption).
+
+-- Marks a database as the synthetic demo store; seeding refuses to overwrite anything else.
+CREATE TABLE db_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 -- ---------- Authoritative reference data (simulated sources) ----------
 
@@ -95,6 +101,40 @@ CREATE TABLE order_items (
     quantity INTEGER NOT NULL CHECK (quantity >= 1),
     PRIMARY KEY (order_id, line_no)
 );
+
+-- Defense in depth (BR-06): even a buggy tool cannot make these changes.
+-- Agent-permitted lifecycle transitions only.
+CREATE TRIGGER guard_lifecycle_transition
+BEFORE UPDATE OF lifecycle_state ON orders
+WHEN NEW.lifecycle_state <> OLD.lifecycle_state AND NOT (
+       (OLD.lifecycle_state = 'PENDING'  AND NEW.lifecycle_state IN ('VERIFIED', 'READY_FOR_DISPATCH'))
+    OR (OLD.lifecycle_state = 'VERIFIED' AND NEW.lifecycle_state IN ('PENDING', 'READY_FOR_DISPATCH')))
+BEGIN
+    SELECT RAISE(ABORT, 'lifecycle transition not permitted');
+END;
+
+-- Order content is frozen from READY_FOR_DISPATCH onwards.
+CREATE TRIGGER guard_locked_order_content
+BEFORE UPDATE OF version, customer_name, phone_raw, address_raw, governorate, city, district, street,
+                 building, floor, apartment, landmark, discount_code ON orders
+WHEN OLD.lifecycle_state NOT IN ('PENDING', 'VERIFIED')
+BEGIN
+    SELECT RAISE(ABORT, 'order content is locked in this lifecycle state');
+END;
+
+CREATE TRIGGER guard_locked_items_update
+BEFORE UPDATE ON order_items
+WHEN (SELECT lifecycle_state FROM orders WHERE order_id = OLD.order_id) NOT IN ('PENDING', 'VERIFIED')
+BEGIN
+    SELECT RAISE(ABORT, 'order items are locked in this lifecycle state');
+END;
+
+CREATE TRIGGER guard_locked_items_delete
+BEFORE DELETE ON order_items
+WHEN (SELECT lifecycle_state FROM orders WHERE order_id = OLD.order_id) NOT IN ('PENDING', 'VERIFIED')
+BEGIN
+    SELECT RAISE(ABORT, 'order items are locked in this lifecycle state');
+END;
 
 -- ---------- Confirmation binding ----------
 

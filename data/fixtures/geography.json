@@ -1,5 +1,5 @@
 {
-  "_note": "SYNTHETIC delivery fees. Real Egyptian governorate names; fees are invented. 'matrouh' deliberately has NO rate (tests BR-03 / DT-04: never guess a fee).",
+  "_note": "SIMULATION ASSUMPTION (SA-11): SYNTHETIC delivery fees, NOT actual carrier rates. Real Egyptian governorate names; fees are invented. 'matrouh' deliberately has NO rate (tests BR-03 / DT-04: never guess a fee).",
   "rates_updated_at": "2026-10-01T09:00:00+03:00",
   "governorates": [
     {"governorate": "cairo",      "name_ar": "القاهرة",     "name_en": "Cairo",       "fee_egp": 60,  "aliases": ["القاهره", "cairo"]},

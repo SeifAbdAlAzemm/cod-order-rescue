@@ -1,23 +1,28 @@
 # Simulation Assumptions
 
-These fill open business questions (`REQUIREMENTS.md` → "Design assumptions requiring explicit decisions") **for the synthetic demo only**. They are **not** verified merchant policy. Each lives in `config/settings.toml` under `[simulation.*]` with `status = "SIMULATION_ASSUMPTION"`; the loader rejects any section without that label.
+These fill open business questions (`REQUIREMENTS.md` → "Design assumptions requiring explicit decisions") **for the synthetic demo only**. They are **not** verified merchant policy. Config-driven ones live in `config/settings.toml` under `[simulation.*]` with `status = "SIMULATION_ASSUMPTION"`; the loader rejects any section without that label.
 
-| ID | Topic | Assumption (configurable) | Config key | Open question it stands in for |
+| ID | Topic | Assumption | Where | Open question it stands in for |
 |---|---|---|---|---|
-| SA-01 | Duplicate window | 24 hours | `simulation.duplicates.window_hours` | Duplicate-candidate window: TBD |
-| SA-02 | Duplicate match | Same normalized phone **and** identical item signature (multiset of SKU/size/quantity); overlapping SKUs alone do not match; CANCELLED orders ignored | `simulation.duplicates.*` | Matching logic: TBD |
+| SA-01 | Duplicate window | 24 hours (configurable) | `simulation.duplicates.window_hours` | Duplicate-candidate window: TBD |
+| SA-02 | Duplicate match | Same normalized phone **and** identical item signature (multiset of SKU/size/quantity, line order ignored); overlapping SKUs alone do not match; CANCELLED orders ignored; a pair the customer confirmed as "both intended" is not re-flagged | `simulation.duplicates.*` | Matching logic: TBD |
 | SA-03 | Address completeness | Required: governorate, city, street, building. Optional: district, floor, apartment, landmark. A landmark never replaces street + building | `simulation.address.*` | Address rules for houses/landmarks/zones: TBD |
-| SA-04 | Phone validity | Egyptian mobile `01[0125]` + 8 digits after normalization (+20 / spaces stripped) | `simulation.phone.pattern` | Contact rules: not specified |
-| SA-05 | Clarification limit | 3 attempts, then `ESCALATE_TO_HUMAN`; no real-time reminders in MVP | `simulation.clarification.*` | Retry count and reminder cadence: TBD |
-| SA-06 | Price changes | Prices re-read at commit; any change invalidates confirmation → ON_HOLD | `simulation.pricing.*` | Quote validity / price lock: TBD |
-| SA-07 | Money | Whole EGP integers | `simulation.pricing.amounts_whole_egp` | — |
+| SA-04 | Phone validity | Egyptian mobile `01[0125]` + 8 digits after normalization (+20 / 0020 / spaces / Arabic digits) | `simulation.phone.pattern` | Contact rules: not specified |
+| SA-05 | Clarification limit | 3 clarification messages, then `ESCALATE_TO_HUMAN`; no real-time reminders | `simulation.clarification.*` | Retry count and reminder cadence: TBD |
+| SA-06 | Price changes | Prices re-read at commit; any change invalidates the accepted confirmation → ON_HOLD, new summary required | `simulation.pricing.*` | Quote validity / price lock: TBD |
+| SA-07 | Money | Whole EGP integers; percentage discounts rounded down | `simulation.pricing.amounts_whole_egp` | — |
 | SA-08 | Stock reservation | Stock decremented atomically at the READY commit, in the simulated order store | `simulation.inventory.reservation_point` | Inventory source of truth / reservation: TBD |
-| SA-09 | Short confirmations | A short affirmative (e.g. "تمام") counts only if it is the first inbound message after the latest OPEN confirmation request, that request is bound to the current order version, and the reply contains no change. Otherwise → ask again | `simulation.confirmation.*` | Refines BR-04 mechanics |
-| SA-10 | Messaging | Simulated outbox only; schema forbids any other delivery value | `simulation.messaging.mode` | Real vs simulated channel (MVP default: simulation) |
-| SA-11 | Shipping fees | Invented per-governorate table; Matrouh intentionally has no rate | `data/fixtures/geography.json` | Merchant delivery eligibility and fees |
-| SA-12 | Lifecycle meaning | `VERIFIED` = data checks passed, awaiting/holding customer confirmation | schema | Simplified proposed lifecycle model |
-| SA-13 | Outcome mapping | Decision-table `BLOCK` → `ESCALATE_TO_HUMAN` with blocked flag; `REEVALUATE` → fresh evaluation; `IDEMPOTENT` → saved prior result returned | (Slice 2) | DT-08 / DT-10 / DT-14 outcomes outside the 3-value enum |
+| SA-09 | Confirmation acceptance | A reply confirms only if: it is the **only** customer message after the latest OPEN request; the request is bound to the current version **and** SHA-256 content hash; every word is in the configured affirmative/filler lexicon, at least one is affirmative, and it is not a question. Otherwise → ask again. Longer but genuine confirmations (e.g. "تمام بس اتأكد إنه أسود") are deliberately **not** accepted — conservative by design | `simulation.confirmation.*` | Refines BR-04 mechanics |
+| SA-10 | Messaging | Simulated outbox only; schema forbids any other delivery value | `simulation.messaging.mode` | Real vs simulated channel |
+| SA-11 | Shipping fees | **Invented per-governorate fees — not actual carrier rates.** Matrouh intentionally has no rate | `data/fixtures/geography.json` | Merchant delivery eligibility and fees |
+| SA-12 | Lifecycle meaning | `VERIFIED` = all checks passed and a confirmation summary was sent. Agent transitions: PENDING→VERIFIED, VERIFIED→PENDING (material change), PENDING/VERIFIED→READY (commit only). Enforced by DB triggers | `schema.sql`, `tools.py` | Simplified proposed lifecycle model |
+| SA-13 | Outcome mapping | DT `BLOCK` → `ESCALATE_TO_HUMAN` with `blocked=true`; `REEVALUATE` → duplicate flag cleared, each order re-evaluated (still needs its own confirmation); `IDEMPOTENT` → saved result returned | `policy.py`, `tools.py` | DT-08 / DT-10 / DT-14 outcomes outside the 3-value enum |
+| SA-14 | Customer change scope | Item changes limited to other variants/quantities (1–10) of products already in the order, active and in stock | `tools.apply_customer_change` | Not specified (keeps MVP away from upsell/CRM) |
+| SA-15 | Grounded data | Text values (address, name, phone, discount code) are applied only if they literally appear in the customer's message, or in the original order address text for intake extraction | `tools.apply_customer_change` | BR-02 "never fabricate" mechanics |
+| SA-16 | Amounts in free text | Agent-written messages may not contain amounts; prices only appear in the deterministic confirmation summary | `tools.send_message` | BR-03 "never guess" mechanics |
+| SA-17 | Duplicate of a READY+ order | The editable order is held; the READY+ order is never modified and is escalated to staff instead | `tools._flag_pairs` | BR-05 vs BR-06 interaction: not specified |
+| SA-18 | Material change | Every applied customer change (items, address, name, phone, discount) is material: version+1, confirmations invalidated | `tools.apply_customer_change` | "Material edit" not defined |
 
 Test-only fault switches (`simulation.fault_injection.*`) are all `false` by default.
 
-All orders, customers (placeholder names "عميل تجريبي N"), phone numbers, prices and stock levels are **synthetic**.
+All orders, customers (placeholder names "عميل تجريبي N"), phone numbers, prices, fees and stock levels are **synthetic**.

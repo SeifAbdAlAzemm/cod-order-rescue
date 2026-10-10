@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from cod_rescue.config import load_settings
-from cod_rescue.db import connect, init_db, schema_version
-from cod_rescue.seed import seed
+from cod_rescue.db import SchemaVersionError, connect, init_db, schema_version
+from cod_rescue.seed import SeedError, seed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,17 +15,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", help="SQLite path (default from config/settings.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init-db", help="create the schema if missing")
-    seed_p = sub.add_parser("seed", help="(re)load synthetic fixtures; deterministic and repeatable")
-    seed_p.add_argument("--reset", action="store_true", help="delete the database file first (e.g. after a schema change)")
-    sub.add_parser("status", help="show schema version, row counts and orders")
+    seed_p = sub.add_parser("seed", help="load synthetic fixtures into an empty database")
+    seed_p.add_argument("--reset", action="store_true",
+                        help="replace an existing SYNTHETIC demo database (refused for any other database)")
+    sub.add_parser("status", help="show schema version and orders")
     args = parser.parse_args(argv)
 
     settings = load_settings()
     db_path = args.db or settings.db_path
-
-    if args.command == "seed" and args.reset and str(db_path) != ":memory:":
-        for suffix in ("", "-wal", "-shm", "-journal"):
-            Path(f"{db_path}{suffix}").unlink(missing_ok=True)
 
     conn = connect(db_path)
     try:
@@ -34,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
             created = init_db(conn)
             print(f"{'Created' if created else 'Already initialized'}: {db_path} (schema v{schema_version(conn)})")
         elif args.command == "seed":
-            counts = seed(conn, settings.fixtures_dir)
+            counts = seed(conn, settings, replace_existing=args.reset)
             print(f"Seeded SYNTHETIC data into {db_path}")
             for table, n in counts.items():
                 if n:
@@ -46,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
                 "SELECT order_id, lifecycle_state, version, agent_outcome FROM orders ORDER BY order_id"
             ):
                 print(f"  {r['order_id']}  {r['lifecycle_state']:<19} v{r['version']}  outcome={r['agent_outcome'] or '-'}")
+    except (SeedError, SchemaVersionError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     return 0
